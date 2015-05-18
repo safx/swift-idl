@@ -84,11 +84,24 @@ class SwiftClass():
             inits = '\n'.join(map(lambda x: x._defaultInitAssignString, self._variables))
             return '    public init(%s) {\n%s\n    }' % (params, inits)
 
-        def getJsonParseExtensionString():
+        def getJsonDecodeString():
             # FIXME: always public
             inits = ', '.join(map(lambda x: x._defaultInitArgumentString, filter(lambda x: not x._jsonOmitValue, self._variables)))
             # check whetherr other key-value exists if needed
             lines = [ 'public class func parseJSON(data: [String: AnyObject]) -> (decoded: %s?, error: String?) {' % (self._name,) ] + sum(map(lambda x: x._jsonParseString, self._variables), []) + [ '    return (%s(%s), nil)'  % (self._name, inits), '}' ]
+            return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
+
+        def getJsonEncodeString():
+            # FIXME: always public
+            lines = [
+                'public func toJSON() -> [String: AnyObject] {',
+                '    return [',
+            ]
+            lines += sum(map(lambda e: map(lambda x:'        ' + x, e._jsonEncodeString), self._variables), [])
+            lines += [
+                '    ]',
+                '}'
+            ]
             return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
 
         def getDescriptionExtensionString():
@@ -101,10 +114,10 @@ class SwiftClass():
             ]
             return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
 
-        inherited = ', '.join(self._inheritedTypes + ['JSONDecodable', 'Printable']) # FIXME: omit if contains
+        inherited = ', '.join(self._inheritedTypes + ['JSONDecodable', 'JSONEncodable', 'Printable']) # FIXME: omit if contains
         variables = '\n'.join(map(lambda x: '    %s' % (x,), self._variables))
         # FIXME: always public
-        return 'public class %s : %s {\n%s\n\n%s\n\n%s\n\n%s\n}\n' % (self._name, inherited, variables, getDefaultInitString(), getJsonParseExtensionString(), getDescriptionExtensionString())
+        return 'public class %s : %s {\n%s\n\n%s\n\n%s\n\n%s\n\n%s\n}\n' % (self._name, inherited, variables, getDefaultInitString(), getJsonDecodeString(), getJsonEncodeString(), getDescriptionExtensionString())
 
     def __repr__(self):
         return self._getClassDeclarationString()
@@ -257,6 +270,16 @@ class SwiftVariable():
         }
         return map(lambda e: (' ' * 4) + e.format(**dic), ret)
 
+    @property
+    def _jsonEncodeString(self):
+        if self._jsonOmitValue:
+            return []
+        elif self.isArray:
+            return ['"%s": map(%s%s) { $0.toJSON() },' % (self._jsonLabel, ' ?? []' if self.isOptional else '', self._name)]
+        elif self.isOptional:
+            return ['"%s": %s.map { $0.toJSON() } ?? NSNull(),' % (self._jsonLabel, self._name)]
+        return ['"%s": %s.toJSON(),' % (self._jsonLabel, self._name)]
+
     def __repr__(self):
         return self._parsedDeclarationWithoutDefaultValue
 
@@ -290,7 +313,7 @@ class SwiftEnum():
             self._contents = f.read()[self.bodyOffset : self.bodyOffset + self.bodyLength]
 
     def _getClassDeclarationString(self):
-        def getJsonParseExtensionString():
+        def getJsonDecodeString():
             # FIXME: always public
             lines = [
                 'public static func parseJSON(data: AnyObject) -> (decoded: %s?, error: String?) {' % (self._name),
@@ -302,7 +325,16 @@ class SwiftEnum():
             ]
             return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
 
-        return self._parsedDeclaration + ' {' + self._contents + '\n' + getJsonParseExtensionString() + '\n}\n'
+        def getJsonEncodeString():
+            # FIXME: always public
+            lines = [
+                'public func toJSON() -> %s {' % (self._inheritedTypes[0]),
+                '    return self.rawValue',
+                '}'
+            ]
+            return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
+
+        return self._parsedDeclaration + ' {' + self._contents + '\n' + getJsonDecodeString() + '\n' + getJsonEncodeString() + '\n}\n'
 
     def __repr__(self):
         return self._getClassDeclarationString()
