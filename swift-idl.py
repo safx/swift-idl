@@ -224,7 +224,7 @@ class SwiftVariable():
         if self.isArray:
             ret += [
                 '    }} else if let a = v as? [AnyObject] {{',
-                '        var r: {typename} = []',
+                '        var r: [{baseTypename}] = []',
                 '        r.reserveCapacity(count(a))',
                 '        for elem in a {{',
                 '            if let e = elem as? [String : AnyObject] {{',
@@ -275,7 +275,7 @@ class SwiftVariable():
         if self._jsonOmitValue:
             return []
         elif self.isArray:
-            return ['"%s": map(%s%s) { $0.toJSON() },' % (self._jsonLabel, ' ?? []' if self.isOptional else '', self._name)]
+            return ['"%s": map(%s%s) { $0.toJSON() },' % (self._jsonLabel, self._name, ' ?? []' if self.isOptional else '')]
         elif self.isOptional:
             return ['"%s": %s.map { $0.toJSON() } ?? NSNull(),' % (self._jsonLabel, self._name)]
         return ['"%s": %s.toJSON(),' % (self._jsonLabel, self._name)]
@@ -360,7 +360,7 @@ class SwiftArray():
 
     @property
     def baseTypename(self):
-        return self._targetClass
+        return self._targetClass.baseTypename
 
 class SwiftOptional():
     def __init__(self, targetClass):
@@ -371,7 +371,7 @@ class SwiftOptional():
 
     @property
     def baseTypename(self):
-        return self._targetClass
+        return self._targetClass.baseTypename
 
 
 def parseTypename(typename):
