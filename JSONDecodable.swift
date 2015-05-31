@@ -10,13 +10,13 @@ import Foundation
 
 protocol JSONDecodable {
     typealias DecodedType = Self
-    static func parseJSON(data: [String: AnyObject]) -> (decoded: DecodedType?, error: String?)
+    static func parseJSON(data: AnyObject) -> (decoded: DecodedType?, error: String?)
 }
 
 // MARK:
 
-extension NSURL {
-    static func parseJSON(data: AnyObject) -> (NSURL?, String?) {
+extension NSURL: JSONDecodable {
+    static func parseJSON(data: AnyObject) -> (decoded: NSURL?, error: String?) {
         if let v = data as? String {
             return (NSURL(string: v), nil)
         }
@@ -24,8 +24,8 @@ extension NSURL {
     }
 }
 
-extension NSDate {
-    static func parseJSON(data: AnyObject) -> (NSDate?, String?) {
+extension NSDate: JSONDecodable {
+    static func parseJSON(data: AnyObject) -> (decoded: NSDate?, error: String?) {
         if let v = data as? String {
             let dateFormatter = NSDateFormatter()
             dateFormatter.dateFormat = "yyyy-MM-dd"
@@ -37,8 +37,8 @@ extension NSDate {
     }
 }
 
-extension String {
-    static func parseJSON(data: AnyObject) -> (String?, String?) {
+extension String: JSONDecodable {
+    static func parseJSON(data: AnyObject) -> (decoded: String?, error: String?) {
         if let v = data as? String {
             return (v, nil)
         }
@@ -46,8 +46,8 @@ extension String {
     }
 }
 
-extension Float {
-    static func parseJSON(data: AnyObject) -> (Float?, String?) {
+extension Float: JSONDecodable {
+    static func parseJSON(data: AnyObject) -> (decoded: Float?, error: String?) {
         if let v = data as? NSNumber {
             return (v.floatValue, nil)
         }
@@ -55,8 +55,8 @@ extension Float {
     }
 }
 
-extension Int {
-    static func parseJSON(data: AnyObject) -> (Int?, String?) {
+extension Int: JSONDecodable {
+    static func parseJSON(data: AnyObject) -> (decoded: Int?, error: String?) {
         if let v = data as? NSNumber {
             return (v.integerValue, nil)
         }
@@ -64,8 +64,8 @@ extension Int {
     }
 }
 
-extension UInt {
-    static func parseJSON(data: AnyObject) -> (UInt?, String?) {
+extension UInt: JSONDecodable {
+    static func parseJSON(data: AnyObject) -> (decoded: UInt?, error: String?) {
         if let v = data as? NSNumber {
             return (UInt(v.unsignedIntegerValue), nil)
         }
@@ -73,8 +73,8 @@ extension UInt {
     }
 }
 
-extension Bool {
-    static func parseJSON(data: AnyObject) -> (Bool?, String?) {
+extension Bool: JSONDecodable {
+    static func parseJSON(data: AnyObject) -> (decoded: Bool?, error: String?) {
         if let v = data as? NSNumber {
             return (v.boolValue, nil)
         }

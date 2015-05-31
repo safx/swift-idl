@@ -29,9 +29,9 @@ SOURCEKITTEN='sourceKitten'
 # Available JSON annotation
 #   let foo: Int        // json:"-"
 #   let fooBar: Int     // json:"foo-bar"
-#   let fooBoo: Int     // json:",omitempty"
-#   let fooBee: Int     // json:",string"  (not supported currentry)
-#   case Unknown        // json:"-"        (not supported currentry)
+#   let fooBoo: Int     // json:",omitempty" (not supported currently)
+#   let fooBee: Int     // json:",string"    (not supported currently)
+#   case Unknown        // json:"-"          (not supported currently)
 
 
 def sourcekitten_doc():
@@ -88,7 +88,7 @@ class SwiftClass():
             # FIXME: always public
             inits = ', '.join(map(lambda x: x._defaultInitArgumentString, filter(lambda x: not x._jsonOmitValue, self._variables)))
             # check whetherr other key-value exists if needed
-            lines = [ 'public class func parseJSON(data: [String: AnyObject]) -> (decoded: %s?, error: String?) {' % (self._name,) ] + sum(map(lambda x: x._jsonParseString, self._variables), []) + [ '    return (%s(%s), nil)'  % (self._name, inits), '}' ]
+            lines = [ 'public class func parseJSON(data: AnyObject) -> (decoded: %s?, error: String?) {' % (self._name,) ] + sum(map(lambda x: x._jsonParseString, self._variables), []) + [ '    return (%s(%s), nil)'  % (self._name, inits), '}' ]
             return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
 
         def getJsonEncodeString():
@@ -186,6 +186,10 @@ class SwiftVariable():
         return self._typename[0] == '['
 
     @property
+    def isArrayOfOptional(self):
+        return len(self._typename) > 3 and self._typename[-2] == ']?'
+
+    @property
     def _defaultInitParamString(self):
         p = '%s: %s' % (self._name, self._typename)
         return p + (' = %s' % (self._defaultValue,) if self._defaultValue else '')
@@ -227,6 +231,10 @@ class SwiftVariable():
                 '        var r: [{baseTypename}] = []',
                 '        r.reserveCapacity(count(array))',
                 '        for e in array {{',
+                '            if let _ = e as? NSNull {{',
+                '                ' + ('r.append(nil)' if self.isArrayOfOptional else 'return (nil, "Null not allowed in \'{jsonlabel}\'")'),
+                '            }}',
+                '',
                 '            let (casted, err) = {baseTypename}.parseJSON(e)',
                 '            if let c = casted {{',
                 '                r.append(c)',
