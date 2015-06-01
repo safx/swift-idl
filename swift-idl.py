@@ -61,12 +61,46 @@ def sourcekitten_syntax(filepath):
     return tokens
 
 
+def parseAnnotation(comment_part):
+    def parseOne(s):
+        m = re.match(r'^(\w+):"([^"]+)"$', s)
+        if m:
+            g = m.groups()
+            if len(g) == 2:
+                return (g[0].lower(), map(unicode.strip, g[1].split(',')))
+        return None
+
+    splitted = re.findall(r'\b\w+:"[^"]+"', comment_part)
+    return {q[0]:q[1] for q in map(parseOne, splitted) if q != None}
+
+
+class JSONAnnotation:
+    def __init__(self, var):
+        anon_dic = var._annotations # FIXME: private access
+        self.jsonOmitValue = False
+        self.jsonLabel = var.name
+
+        annons = anon_dic.get('json', [''])
+        if annons[0] != '':
+            if annons[0] == '-':
+                self.jsonOmitValue = True
+            else:
+                self.jsonLabel = annons[0]
+
+        for i in annons[1:]:
+            if i == 'omitempty':
+                pass
+            elif i == 'string':
+                pass
+            else:
+                raise RuntimeError('Unknown annotation: ' + i)
+
 
 class SwiftClass():
     def __init__(self, node):
-        self.filepath   = node['key.filepath']
-        self.bodyOffset = node['key.bodyoffset']
-        self.bodyLength = node['key.bodylength']
+        self._filepath   = node['key.filepath']
+        self._bodyOffset = node['key.bodyoffset']
+        self._bodyLength = node['key.bodylength']
         self._name = node['key.name']
         self._parsedDeclaration = node['key.parsed_declaration']
 
@@ -82,13 +116,21 @@ class SwiftClass():
         ps = [DefaultInit(), JSONDecodable(), JSONEncodable(), Printable()]
 
         inherited = ', '.join(self._inheritedTypes + [i.protocolClass for i in ps if i.protocolClass != None])
-        variables = '\n'.join(map(lambda x: '    ' + x._parsedDeclarationWithoutDefaultValue, self._variables))
+        variables = '\n'.join(map(lambda x: '    ' + x._parsedDeclarationWithoutDefaultValue, self._variables))  # FIXME: private access
 
         # FIXME: always public
         ret = 'public class %s : %s {\n%s\n\n' % (self._name, inherited, variables)
         ret += '\n\n'.join(map(lambda e: e.processClass(self), ps))
         ret += '\n}\n'
         return ret
+
+    @property
+    def name(self):
+        return self._name
+
+    @property
+    def variables(self):
+        return self._variables
 
     def __repr__(self):
         return self._getClassDeclarationString()
@@ -99,36 +141,15 @@ class SwiftVariable():
         self._name              = node['key.name']
         self._typename          = node['key.typename']
         self._parsedDeclaration = node['key.parsed_declaration']
-
         self._defaultValue      = None
-        self._jsonOmitValue     = False
-        self._jsonLabel         = self._name
 
-        self._parseDeclaration()
+        self._annotations = {}
         self._parsedTypename = parseTypename(self._typename)
+        self._parseDeclaration()
 
         #print(self._name, self._defaultValue, self._jsonOmitValue, self.isOptional, self._parsedTypename)
 
     def _parseDeclaration(self):
-        def parseAnnotation(comment_part):
-            m = re.match('json:"([^"]+)"', comment_part.strip())
-            if not m: return
-
-            annons = m.group(1).split(',')
-            if annons[0] != '':
-                if annons[0] == '-':
-                    self._jsonOmitValue = True
-                else:
-                    self._jsonLabel = annons[0]
-
-            for i in annons[1:]:
-                if i == 'omitempty':
-                    pass
-                elif i == 'string':
-                    pass
-                else:
-                    raise RuntimeError('Unknown annotation: ' + i)
-
         def parseDefaultValue(decl_part):
             ts = decl_part.split('=')
             if len(ts) == 2:
@@ -140,9 +161,21 @@ class SwiftVariable():
         cs = self._parsedDeclaration.split('//')
         if len(cs) >= 2:
             # the first comment area is only checked
-            parseAnnotation(cs[1])
+            self._annotations = parseAnnotation(cs[1])
 
         parseDefaultValue(cs[0])
+
+    @property
+    def name(self):
+        return self._name
+
+    @property
+    def defaultValue(self):
+        return self._defaultValue
+
+    @property
+    def typename(self):
+        return self._typename
 
     @property
     def baseTypename(self):
@@ -166,10 +199,6 @@ class SwiftVariable():
         s = self._parsedDeclaration.split('=')
         return s[0].strip()
 
-    @property
-    def _descriptionString(self):
-        return '%s=\(%s)' % (self._name, self._name)
-
 
 class SwiftEnum():
     def __init__(self, node):
@@ -185,19 +214,19 @@ class SwiftEnum():
                     cases.append(a)
             return cases
 
-        self.filepath   = node['key.filepath']
-        self.bodyOffset = node['key.bodyoffset']
-        self.bodyLength = node['key.bodylength']
+        self._filepath   = node['key.filepath']
+        self._bodyOffset = node['key.bodyoffset']
+        self._bodyLength = node['key.bodylength']
 
         self._name              = node['key.name']
         self._parsedDeclaration = node['key.parsed_declaration']
-        self._cases = getCases(self.filepath, self.bodyOffset, self.bodyLength)
+        self._cases = getCases(self._filepath, self._bodyOffset, self._bodyLength)
         self._inheritedTypes = map(lambda e: e['key.name'], node.get('key.inheritedtypes', []))
         if len(self._inheritedTypes) == 0:
             raise RuntimeError('Enum must have a row-type: ' + self._name)
 
-        with file(self.filepath) as f:
-            self._contents = f.read()[self.bodyOffset : self.bodyOffset + self.bodyLength]
+        with file(self._filepath) as f:
+            self._contents = f.read()[self._bodyOffset : self._bodyOffset + self._bodyLength]
 
     def _getClassDeclarationString(self):
         ps = [JSONDecodable(), JSONEncodable()]
@@ -211,6 +240,10 @@ class SwiftEnum():
         ret += '\n\n'.join(map(lambda e: e.processEnum(self), ps))
         ret += '\n}\n'
         return ret
+
+    @property
+    def name(self):
+        return self._name
 
     def __repr__(self):
         return self._getClassDeclarationString()
@@ -266,12 +299,12 @@ class DefaultInit():
 
     def processClass(self, swiftClass):
         def param(p):
-            return p._name + ': ' + p._typename + (' = ' + p._defaultValue if p._defaultValue != None else '')
+            return p.name + ': ' + p.typename + (' = ' + p.defaultValue if p.defaultValue != None else '')
         def init(p):
-            return ' ' * 8 + 'self.%s = %s' % (p._name, p._name)
+            return ' ' * 8 + 'self.%s = %s' % (p.name, p.name)
 
-        paramString = ', '.join(map(param, swiftClass._variables))
-        initString = '\n'.join(map(init, swiftClass._variables))
+        paramString = ', '.join(map(param, swiftClass.variables))
+        initString = '\n'.join(map(init, swiftClass.variables))
         return '    public init(%s) {\n%s\n    }' % (paramString, initString)
 
 
@@ -286,15 +319,16 @@ class JSONDecodable():
 
     def processClass(self, swiftClass):
         def paramString(var):
+            an = JSONAnnotation(var)
             #FIXME Array, User-type
-            if var._jsonOmitValue:
+            if an.jsonOmitValue:
                 return []
 
             ret = [
                 'let {name}: {typename}',
                 'if let v: AnyObject = data["{jsonlabel}"] {{',
                 '    if let _ = v as? NSNull {{',
-                '        ' + ('{name} = {default}' if var._defaultValue else 'return (nil, "Null not allowed in \'{jsonlabel}\'")'),
+                '        ' + ('{name} = {default}' if var.defaultValue else 'return (nil, "Null not allowed in \'{jsonlabel}\'")'),
             ]
 
             if var.isArray:
@@ -332,39 +366,40 @@ class JSONDecodable():
             ret += [
                 '    }}',
                 '}} else {{',
-                '    ' + ('{name} = {default}' if var._defaultValue else 'return (nil, "Keyword not found: \'{jsonlabel}\'")'),
+                '    ' + ('{name} = {default}' if var.defaultValue else 'return (nil, "Keyword not found: \'{jsonlabel}\'")'),
                 '}}',
                 ''
             ]
 
             dic = {
-                'jsonlabel'    : var._jsonLabel,
-                'name'         : var._name,
-                'typename'     : var._typename,
+                'jsonlabel'    : an.jsonLabel,
+                'name'         : var.name,
+                'typename'     : var.typename,
                 'baseTypename' : var.baseTypename,
-                'default'      : var._defaultValue
+                'default'      : var.defaultValue
             }
             return map(lambda e: (' ' * 4) + e.format(**dic), ret)
 
         # FIXME: always public
-        inits = ', '.join(map(lambda p: '%s: %s' % (p._name, p._name), filter(lambda x: not x._jsonOmitValue, swiftClass._variables)))
+        inits = ', '.join(map(lambda p: '%s: %s' % (p.name, p.name), filter(lambda x: not JSONAnnotation(x).jsonOmitValue, swiftClass.variables)))
         # check whetherr other key-value exists if needed
-        lines = [ 'public class func parseJSON(data: AnyObject) -> (decoded: %s?, error: String?) {' % (swiftClass._name,) ]
-        lines += sum(map(paramString, swiftClass._variables), [])
-        lines += [ '    return (%s(%s), nil)'  % (swiftClass._name, inits), '}' ]
+        lines = [ 'public class func parseJSON(data: AnyObject) -> (decoded: %s?, error: String?) {' % (swiftClass.name,) ]
+        lines += sum(map(paramString, swiftClass.variables), [])
+        lines += [ '    return (%s(%s), nil)'  % (swiftClass.name, inits), '}' ]
         return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
 
     def processEnum(self, swiftEnum):
         # FIXME: always public
         lines = [
-            'public static func parseJSON(data: AnyObject) -> (decoded: %s?, error: String?) {' % (swiftEnum._name),
-            '    if let v = data as? %s {' % (swiftEnum._inheritedTypes[0]),
-            '        return (%s(rawValue: v), nil)' % (swiftEnum._name),
+            'public static func parseJSON(data: AnyObject) -> (decoded: %s?, error: String?) {' % (swiftEnum.name),
+            '    if let v = data as? %s {' % (swiftEnum._inheritedTypes[0]), # FIXME: private access
+            '        return (%s(rawValue: v), nil)' % (swiftEnum.name),
             '    }',
-            '    return (nil, "Type transformation failed in %s")' % (swiftEnum._name),
+            '    return (nil, "Type transformation failed in %s")' % (swiftEnum.name),
             '}'
         ]
         return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
+
 
 class JSONEncodable():
     @property
@@ -377,20 +412,21 @@ class JSONEncodable():
 
     def processClass(self, swiftClass):
         def paramString(var):
-            if var._jsonOmitValue:
+            an = JSONAnnotation(var)
+            if an.jsonOmitValue:
                 return []
             elif var.isArray:
-                return ['"%s": map(%s%s) { $0.toJSON() },' % (var._jsonLabel, var._name, ' ?? []' if var.isOptional else '')]
+                return ['"%s": map(%s%s) { $0.toJSON() },' % (an.jsonLabel, var.name, ' ?? []' if var.isOptional else '')]
             elif var.isOptional:
-                return ['"%s": %s.map { $0.toJSON() } ?? NSNull(),' % (var._jsonLabel, var._name)]
-            return ['"%s": %s.toJSON(),' % (var._jsonLabel, var._name)]
+                return ['"%s": %s.map { $0.toJSON() } ?? NSNull(),' % (an.jsonLabel, var.name)]
+            return ['"%s": %s.toJSON(),' % (an.jsonLabel, var.name)]
 
         # FIXME: always public
         lines = [
             'public func toJSON() -> [String: AnyObject] {',
             '    return [',
         ]
-        lines += sum(map(lambda e: map(lambda x:'        ' + x, paramString(e)), swiftClass._variables), [])
+        lines += sum(map(lambda e: map(lambda x:'        ' + x, paramString(e)), swiftClass.variables), [])
         lines += [
             '    ]',
             '}'
@@ -400,11 +436,12 @@ class JSONEncodable():
     def processEnum(self, swiftEnum):
         # FIXME: always public
         lines = [
-            'public func toJSON() -> %s {' % (swiftEnum._inheritedTypes[0]),
+            'public func toJSON() -> %s {' % (swiftEnum._inheritedTypes[0]), # FIXME: private access
             '    return rawValue',
             '}'
         ]
         return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
+
 
 class Printable():
     @property
@@ -417,10 +454,11 @@ class Printable():
 
     def processClass(self, swiftClass):
         # FIXME: always public
-        params = ', '.join(map(lambda x: x._descriptionString, swiftClass._variables))
+        params = ', '.join(map(lambda x: '%s=\(%s)' % (x.name, x.name), swiftClass.variables))
+
         lines = [
             'public var description: String {',
-            '    return "%s(%s)"'  % (swiftClass._name, params),
+            '    return "%s(%s)"'  % (swiftClass.name, params),
             '}'
         ]
         return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
