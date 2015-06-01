@@ -43,11 +43,14 @@ def sourcekitten_doc():
 def sourcekitten_syntax(filepath):
     def getToken(f):
         contents = f.read()
+        linenumMap = map(lambda x: 1 if x == '\n' else 0, contents) # FIXME: check CRLF or LF
+
         def func(c):
             offset = c['offset']
             length = c['length']
             content = contents[offset : offset + length]
             c['content'] = content
+            c['lineNumber'] = sum(linenumMap[:offset], 1)
             return c
         return func
 
@@ -116,7 +119,7 @@ class SwiftClass():
         ps = [DefaultInit(), JSONDecodable(), JSONEncodable(), Printable()]
 
         inherited = ', '.join(self._inheritedTypes + [i.protocolClass for i in ps if i.protocolClass != None])
-        variables = '\n'.join(map(lambda x: '    ' + x._parsedDeclarationWithoutDefaultValue, self._variables))  # FIXME: private access
+        variables = '\n'.join(map(lambda x: '    ' + x.parsedDeclarationWithoutDefaultValue, self._variables))
 
         # FIXME: always public
         ret = 'public class %s : %s {\n%s\n\n' % (self._name, inherited, variables)
@@ -194,7 +197,7 @@ class SwiftVariable():
         return len(self._typename) > 3 and self._typename[-2] == ']?'
 
     @property
-    def _parsedDeclarationWithoutDefaultValue(self):
+    def parsedDeclarationWithoutDefaultValue(self):
         # FIXME: remove default value only
         s = self._parsedDeclaration.split('=')
         return s[0].strip()
@@ -320,7 +323,6 @@ class JSONDecodable():
     def processClass(self, swiftClass):
         def paramString(var):
             an = JSONAnnotation(var)
-            #FIXME Array, User-type
             if an.jsonOmitValue:
                 return []
 
@@ -464,23 +466,6 @@ class Printable():
         return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
 
 
-
-def getAliasesFromFiles(fileset):
-    # FIXME: We treat as public and in global scope for all typealias because we don't check any accessibility.
-    def getAliasesFromTokens(tokens):
-        aliases = []
-        for i in range(len(tokens)):
-            t = tokens[i]
-            if t['content'] == 'typealias' and t['type'] == 'source.lang.swift.syntaxtype.keyword' and i + 2 < len(tokens):
-                key = tokens[i+1]
-                val = tokens[i+2]
-                a = (key['content'], val['content'])
-                aliases.append(a)
-        return aliases
-
-    return sum([getAliasesFromTokens(sourcekitten_syntax(i)) for i in fileset], [])
-
-
 def visitSubstructure(func, sublist, initial):
     tmp = initial
     for i in sublist:
@@ -490,11 +475,6 @@ def visitSubstructure(func, sublist, initial):
         if subs:
             tmp = visitSubstructure(func, subs, tmp)
     return tmp
-
-
-def getFilepath(a, n):
-    p = n.get('key.filepath', None)
-    return a + [p] if p else a
 
 
 # FIXME: Inner or inherit classes are not supported
@@ -508,10 +488,6 @@ def getClassOrEnum(a, n):
 
 
 parsed = sourcekitten_doc()
-
-#files   = set(visitSubstructure(getFilepath, parsed, []))
-#aliases = getAliasesFromFiles(files)
-#print(aliases)
 
 info = visitSubstructure(getClassOrEnum, parsed, [])
 
