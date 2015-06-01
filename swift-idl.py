@@ -79,45 +79,16 @@ class SwiftClass():
         self._inheritedTypes = map(lambda e: e['key.name'], node.get('key.inheritedtypes', []))
 
     def _getClassDeclarationString(self):
-        def getDefaultInitString():
-            params = ', '.join(map(lambda x: x._defaultInitParamString, self._variables))
-            inits = '\n'.join(map(lambda x: x._defaultInitAssignString, self._variables))
-            return '    public init(%s) {\n%s\n    }' % (params, inits)
+        ps = [DefaultInit(), JSONDecodable(), JSONEncodable(), Printable()]
 
-        def getJsonDecodeString():
-            # FIXME: always public
-            inits = ', '.join(map(lambda x: x._defaultInitArgumentString, filter(lambda x: not x._jsonOmitValue, self._variables)))
-            # check whetherr other key-value exists if needed
-            lines = [ 'public class func parseJSON(data: AnyObject) -> (decoded: %s?, error: String?) {' % (self._name,) ] + sum(map(lambda x: x._jsonParseString, self._variables), []) + [ '    return (%s(%s), nil)'  % (self._name, inits), '}' ]
-            return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
+        inherited = ', '.join(self._inheritedTypes + [i.protocolClass for i in ps if i.protocolClass != None])
+        variables = '\n'.join(map(lambda x: '    ' + x._parsedDeclarationWithoutDefaultValue, self._variables))
 
-        def getJsonEncodeString():
-            # FIXME: always public
-            lines = [
-                'public func toJSON() -> [String: AnyObject] {',
-                '    return [',
-            ]
-            lines += sum(map(lambda e: map(lambda x:'        ' + x, e._jsonEncodeString), self._variables), [])
-            lines += [
-                '    ]',
-                '}'
-            ]
-            return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
-
-        def getDescriptionExtensionString():
-            # FIXME: always public
-            params = ', '.join(map(lambda x: x._descriptionString, self._variables))
-            lines = [
-                'public var description: String {',
-                '    return "%s(%s)"'  % (self._name, params),
-                '}'
-            ]
-            return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
-
-        inherited = ', '.join(self._inheritedTypes + ['JSONDecodable', 'JSONEncodable', 'Printable']) # FIXME: omit if contains
-        variables = '\n'.join(map(lambda x: '    %s' % (x,), self._variables))
         # FIXME: always public
-        return 'public class %s : %s {\n%s\n\n%s\n\n%s\n\n%s\n\n%s\n}\n' % (self._name, inherited, variables, getDefaultInitString(), getJsonDecodeString(), getJsonEncodeString(), getDescriptionExtensionString())
+        ret = 'public class %s : %s {\n%s\n\n' % (self._name, inherited, variables)
+        ret += '\n\n'.join(map(lambda e: e.processClass(self), ps))
+        ret += '\n}\n'
+        return ret
 
     def __repr__(self):
         return self._getClassDeclarationString()
@@ -190,19 +161,6 @@ class SwiftVariable():
         return len(self._typename) > 3 and self._typename[-2] == ']?'
 
     @property
-    def _defaultInitParamString(self):
-        p = '%s: %s' % (self._name, self._typename)
-        return p + (' = %s' % (self._defaultValue,) if self._defaultValue else '')
-
-    @property
-    def _defaultInitAssignString(self):
-        return ' ' * 8 + 'self.%s = %s' % (self._name, self._name)
-
-    @property
-    def _defaultInitArgumentString(self):
-        return '%s: %s' % (self._name, self._name)
-
-    @property
     def _parsedDeclarationWithoutDefaultValue(self):
         # FIXME: remove default value only
         s = self._parsedDeclaration.split('=')
@@ -211,81 +169,6 @@ class SwiftVariable():
     @property
     def _descriptionString(self):
         return '%s=\(%s)' % (self._name, self._name)
-
-    @property
-    def _jsonParseString(self):
-        #FIXME Array, User-type
-        if self._jsonOmitValue:
-            return []
-
-        ret = [
-            'let {name}: {typename}',
-            'if let v: AnyObject = data["{jsonlabel}"] {{',
-            '    if let _ = v as? NSNull {{',
-            '        ' + ('{name} = {default}' if self._defaultValue else 'return (nil, "Null not allowed in \'{jsonlabel}\'")'),
-        ]
-
-        if self.isArray:
-            ret += [
-                '    }} else if let array = v as? [AnyObject] {{',
-                '        var r: [{baseTypename}] = []',
-                '        r.reserveCapacity(count(array))',
-                '        for e in array {{',
-                '            if let _ = e as? NSNull {{',
-                '                ' + ('r.append(nil)' if self.isArrayOfOptional else 'return (nil, "Null not allowed in \'{jsonlabel}\'")'),
-                '            }}',
-                '',
-                '            let (casted, err) = {baseTypename}.parseJSON(e)',
-                '            if let c = casted {{',
-                '                r.append(c)',
-                '            }} else {{',
-                '                return (nil, err ?? "Type transformation failed in \'{jsonlabel}\'")',
-                '            }}',
-                '        }}',
-                '        {name} = r',
-                '    }} else {{',
-                '        return (nil, "Type transformation failed in \'{jsonlabel}\'")',
-            ]
-        else:
-            ret += [
-                '    }} else {{',
-                '        let (casted, err) = {baseTypename}.parseJSON(v)',
-                '        if let c = casted {{',
-                '            {name} = c',
-                '        }} else {{',
-                '            return (nil, err ?? "Type transformation failed in \'{jsonlabel}\'")',
-                '        }}',
-            ]
-
-        ret += [
-            '    }}',
-            '}} else {{',
-            '    ' + ('{name} = {default}' if self._defaultValue else 'return (nil, "Keyword not found: \'{jsonlabel}\'")'),
-            '}}',
-            ''
-        ]
-
-        dic = {
-            'jsonlabel'    : self._jsonLabel,
-            'name'         : self._name,
-            'typename'     : self._typename,
-            'baseTypename' : self.baseTypename,
-            'default'      : self._defaultValue
-        }
-        return map(lambda e: (' ' * 4) + e.format(**dic), ret)
-
-    @property
-    def _jsonEncodeString(self):
-        if self._jsonOmitValue:
-            return []
-        elif self.isArray:
-            return ['"%s": map(%s%s) { $0.toJSON() },' % (self._jsonLabel, self._name, ' ?? []' if self.isOptional else '')]
-        elif self.isOptional:
-            return ['"%s": %s.map { $0.toJSON() } ?? NSNull(),' % (self._jsonLabel, self._name)]
-        return ['"%s": %s.toJSON(),' % (self._jsonLabel, self._name)]
-
-    def __repr__(self):
-        return self._parsedDeclarationWithoutDefaultValue
 
 
 class SwiftEnum():
@@ -317,28 +200,17 @@ class SwiftEnum():
             self._contents = f.read()[self.bodyOffset : self.bodyOffset + self.bodyLength]
 
     def _getClassDeclarationString(self):
-        def getJsonDecodeString():
-            # FIXME: always public
-            lines = [
-                'public static func parseJSON(data: AnyObject) -> (decoded: %s?, error: String?) {' % (self._name),
-                '    if let v = data as? %s {' % (self._inheritedTypes[0]),
-                '        return (%s(rawValue: v), nil)' % (self._name),
-                '    }',
-                '    return (nil, "Type transformation failed in %s")' % (self._name),
-                '}'
-            ]
-            return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
+        ps = [JSONDecodable(), JSONEncodable()]
 
-        def getJsonEncodeString():
-            # FIXME: always public
-            lines = [
-                'public func toJSON() -> %s {' % (self._inheritedTypes[0]),
-                '    return self.rawValue',
-                '}'
-            ]
-            return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
+        pss = [i.protocolEnum for i in ps if i.protocolEnum != None]
+        inherited = ', '.join(pss)
+        if len(pss) > 0:
+            inherited = ', ' + inherited
 
-        return self._parsedDeclaration + ' {' + self._contents + '\n' + getJsonDecodeString() + '\n' + getJsonEncodeString() + '\n}\n'
+        ret = self._parsedDeclaration + inherited + ' {' + self._contents + '\n'
+        ret += '\n\n'.join(map(lambda e: e.processEnum(self), ps))
+        ret += '\n}\n'
+        return ret
 
     def __repr__(self):
         return self._getClassDeclarationString()
@@ -385,6 +257,173 @@ def parseTypename(typename):
         return SwiftArray(parseTypename(typename[1:-1]))
     else:
         return SwiftTypename(typename)
+
+
+class DefaultInit():
+    @property
+    def protocolClass(self):
+        return None
+
+    def processClass(self, swiftClass):
+        def param(p):
+            return p._name + ': ' + p._typename + (' = ' + p._defaultValue if p._defaultValue != None else '')
+        def init(p):
+            return ' ' * 8 + 'self.%s = %s' % (p._name, p._name)
+
+        paramString = ', '.join(map(param, swiftClass._variables))
+        initString = '\n'.join(map(init, swiftClass._variables))
+        return '    public init(%s) {\n%s\n    }' % (paramString, initString)
+
+
+class JSONDecodable():
+    @property
+    def protocolClass(self):
+        return 'JSONDecodable'
+
+    @property
+    def protocolEnum(self):
+        return None
+
+    def processClass(self, swiftClass):
+        def paramString(var):
+            #FIXME Array, User-type
+            if var._jsonOmitValue:
+                return []
+
+            ret = [
+                'let {name}: {typename}',
+                'if let v: AnyObject = data["{jsonlabel}"] {{',
+                '    if let _ = v as? NSNull {{',
+                '        ' + ('{name} = {default}' if var._defaultValue else 'return (nil, "Null not allowed in \'{jsonlabel}\'")'),
+            ]
+
+            if var.isArray:
+                ret += [
+                    '    }} else if let array = v as? [AnyObject] {{',
+                    '        var r: [{baseTypename}] = []',
+                    '        r.reserveCapacity(count(array))',
+                    '        for e in array {{',
+                    '            if let _ = e as? NSNull {{',
+                    '                ' + ('r.append(nil)' if var.isArrayOfOptional else 'return (nil, "Null not allowed in \'{jsonlabel}\'")'),
+                    '            }}',
+                    '',
+                    '            let (casted, err) = {baseTypename}.parseJSON(e)',
+                    '            if let c = casted {{',
+                    '                r.append(c)',
+                    '            }} else {{',
+                    '                return (nil, err ?? "Type transformation failed in \'{jsonlabel}\'")',
+                    '            }}',
+                    '        }}',
+                    '        {name} = r',
+                    '    }} else {{',
+                    '        return (nil, "Type transformation failed in \'{jsonlabel}\'")',
+                ]
+            else:
+                ret += [
+                    '    }} else {{',
+                    '        let (casted, err) = {baseTypename}.parseJSON(v)',
+                    '        if let c = casted {{',
+                    '            {name} = c',
+                    '        }} else {{',
+                    '            return (nil, err ?? "Type transformation failed in \'{jsonlabel}\'")',
+                    '        }}',
+                ]
+
+            ret += [
+                '    }}',
+                '}} else {{',
+                '    ' + ('{name} = {default}' if var._defaultValue else 'return (nil, "Keyword not found: \'{jsonlabel}\'")'),
+                '}}',
+                ''
+            ]
+
+            dic = {
+                'jsonlabel'    : var._jsonLabel,
+                'name'         : var._name,
+                'typename'     : var._typename,
+                'baseTypename' : var.baseTypename,
+                'default'      : var._defaultValue
+            }
+            return map(lambda e: (' ' * 4) + e.format(**dic), ret)
+
+        # FIXME: always public
+        inits = ', '.join(map(lambda p: '%s: %s' % (p._name, p._name), filter(lambda x: not x._jsonOmitValue, swiftClass._variables)))
+        # check whetherr other key-value exists if needed
+        lines = [ 'public class func parseJSON(data: AnyObject) -> (decoded: %s?, error: String?) {' % (swiftClass._name,) ]
+        lines += sum(map(paramString, swiftClass._variables), [])
+        lines += [ '    return (%s(%s), nil)'  % (swiftClass._name, inits), '}' ]
+        return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
+
+    def processEnum(self, swiftEnum):
+        # FIXME: always public
+        lines = [
+            'public static func parseJSON(data: AnyObject) -> (decoded: %s?, error: String?) {' % (swiftEnum._name),
+            '    if let v = data as? %s {' % (swiftEnum._inheritedTypes[0]),
+            '        return (%s(rawValue: v), nil)' % (swiftEnum._name),
+            '    }',
+            '    return (nil, "Type transformation failed in %s")' % (swiftEnum._name),
+            '}'
+        ]
+        return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
+
+class JSONEncodable():
+    @property
+    def protocolClass(self):
+        return 'JSONEncodable'
+
+    @property
+    def protocolEnum(self):
+        return None
+
+    def processClass(self, swiftClass):
+        def paramString(var):
+            if var._jsonOmitValue:
+                return []
+            elif var.isArray:
+                return ['"%s": map(%s%s) { $0.toJSON() },' % (var._jsonLabel, var._name, ' ?? []' if var.isOptional else '')]
+            elif var.isOptional:
+                return ['"%s": %s.map { $0.toJSON() } ?? NSNull(),' % (var._jsonLabel, var._name)]
+            return ['"%s": %s.toJSON(),' % (var._jsonLabel, var._name)]
+
+        # FIXME: always public
+        lines = [
+            'public func toJSON() -> [String: AnyObject] {',
+            '    return [',
+        ]
+        lines += sum(map(lambda e: map(lambda x:'        ' + x, paramString(e)), swiftClass._variables), [])
+        lines += [
+            '    ]',
+            '}'
+        ]
+        return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
+
+    def processEnum(self, swiftEnum):
+        # FIXME: always public
+        lines = [
+            'public func toJSON() -> %s {' % (swiftEnum._inheritedTypes[0]),
+            '    return rawValue',
+            '}'
+        ]
+        return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
+
+class Printable():
+    @property
+    def protocolClass(self):
+        return 'Printable'
+
+    @property
+    def protocolEnum(self):
+        return 'Printable'
+
+    def processClass(self, swiftClass):
+        # FIXME: always public
+        params = ', '.join(map(lambda x: x._descriptionString, swiftClass._variables))
+        lines = [
+            'public var description: String {',
+            '    return "%s(%s)"'  % (swiftClass._name, params),
+            '}'
+        ]
+        return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
 
 
 
