@@ -41,26 +41,41 @@ def sourcekitten_doc():
 
 
 def sourcekitten_syntax(filepath):
-    def getToken(f):
-        contents = f.read()
-        linenumMap = map(lambda x: 1 if x == '\n' else 0, contents) # FIXME: check CRLF or LF
-
+    def addContent(contents):
         def func(c):
             offset = c['offset']
             length = c['length']
-            content = contents[offset : offset + length]
-            c['content'] = content
+            c['content'] = contents[offset : offset + length]
+            return c
+        return func
+
+    def addLineNumber(contents):
+        linenumMap = map(lambda x: 1 if x == '\n' else 0, contents) # FIXME: check CRLF or LF
+        def func(c):
+            offset = c['offset']
             c['lineNumber'] = sum(linenumMap[:offset], 1)
             return c
         return func
 
-    def addToken(s):
+    def addPrevString(contents):
+        def func(a, c):
+            offset = c['offset']
+            length = c['length']
+            c['prevString'] = contents[a:offset]
+            return offset + length
+        return func
+
+    def addAdditionalInfo(s):
         with file(filepath) as f:
-            return map(getToken(f), s)
+            contents = f.read()
+            map(addContent(contents), s)
+            map(addLineNumber(contents), s)
+            reduce(addPrevString(contents), s, 0)
+            return s
 
     p = subprocess.Popen([SOURCEKITTEN, 'syntax', '--file', filepath], stdout=subprocess.PIPE)
     (stdoutdata, _) = p.communicate()
-    tokens = addToken(json.loads(stdoutdata))
+    tokens = addAdditionalInfo(json.loads(stdoutdata))
     return tokens
 
 
@@ -466,14 +481,23 @@ class Printable():
         return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
 
 
-def visitSubstructure(func, sublist, initial):
+def visitSubstructure(func, sublist, initial, level = 0):
     tmp = initial
-    for i in sublist:
-        tmp = func(tmp, i)
 
-        subs = i.get('key.substructure', None)
-        if subs:
-            tmp = visitSubstructure(func, subs, tmp)
+    if level == 0: # Array
+        for i in sublist:
+            tmp = visitSubstructure(func, i, tmp, level + 1)
+    elif level == 1: # Dict(File:Dict)
+        for i in sublist:
+            subs = sublist[i].get('key.substructure', None)
+            if subs:
+                tmp = visitSubstructure(func, subs, tmp, level + 1)
+    else:
+        for i in sublist:
+            tmp = func(tmp, i)
+            subs = i.get('key.substructure', None)
+            if subs:
+                tmp = visitSubstructure(func, subs, tmp, level + 1)
     return tmp
 
 
