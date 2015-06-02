@@ -114,6 +114,27 @@ class JSONAnnotation:
                 raise RuntimeError('Unknown annotation: ' + i)
 
 
+def getMacroProtocolByName(protocols, name):
+    for p in protocols:
+        if p.name == name:
+            return p._clazz # FIXME: private
+    return None
+
+def getMacroProtocolsByNames(protocols, names):
+    ret = []
+    for n in names:
+        clazz = getMacroProtocolByName(protocols, n)
+        if clazz:
+            ret.append(clazz())
+    return ret
+
+def getDefaultMacroProtocol(protocols, name = 'Default'):
+    for p in protocols:
+        if p.name == name:
+            return getMacroProtocolsByNames(protocols, p._inheritedTypes) # FIXME: private
+    return []
+
+
 class SwiftClass():
     def __init__(self, node):
         self._filepath   = node['key.filepath']
@@ -130,16 +151,25 @@ class SwiftClass():
         self._variables = reduce(getVariables, node['key.substructure'], [])
         self._inheritedTypes = map(lambda e: e['key.name'], node.get('key.inheritedtypes', []))
 
-    def _getClassDeclarationString(self):
-        ps = [DefaultInit(), JSONDecodable(), JSONEncodable(), Printable()]
+    def getDeclarationString(self, protocols):
+        ps = getMacroProtocolsByNames(protocols, self._inheritedTypes)
+        if len(ps) == 0:
+            ps = getDefaultMacroProtocol(protocols, 'ClassDefault')
 
-        inherited = ', '.join(self._inheritedTypes + [i.protocolClass for i in ps if i.protocolClass != None])
-        variables = '\n'.join(map(lambda x: '    ' + x.parsedDeclarationWithoutDefaultValue, self._variables))
+        typeInheritances = [i.protocolClass for i in ps if i.protocolClass != None]
 
         # FIXME: always public
-        ret = 'public class %s : %s {\n%s\n\n' % (self._name, inherited, variables)
-        ret += '\n\n'.join(map(lambda e: e.processClass(self), ps))
-        ret += '\n}\n'
+        ret = 'public class ' + self._name
+        if len(typeInheritances) > 0:
+            ret += ': ' + ', '.join(typeInheritances)
+        ret += ' {\n'
+        ret += '\n'.join(map(lambda x: '    ' + x.parsedDeclarationWithoutDefaultValue, self._variables))
+        ret += '\n'
+        if len(ps) > 0:
+            ret += '\n'
+            ret += '\n\n'.join(map(lambda e: e.processClass(self), ps))
+            ret += '\n'
+        ret += '}\n'
         return ret
 
     @property
@@ -149,9 +179,6 @@ class SwiftClass():
     @property
     def variables(self):
         return self._variables
-
-    def __repr__(self):
-        return self._getClassDeclarationString()
 
 
 class SwiftVariable():
@@ -220,16 +247,47 @@ class SwiftVariable():
 
 class SwiftEnum():
     def __init__(self, node):
-        def getCases(filepath, offset, length):
-            tokens = sourcekitten_syntax(filepath)
+        def getCasesForRawType(filepath, offset, length):
+            tokens = sourcekitten_syntax(filepath) # FIXME: multiple loads
             cases = []
             for i in range(len(tokens)):
                 t = tokens[i]
-                if t['content'] == 'case' and t['type'] == 'source.lang.swift.syntaxtype.keyword' and offset <= t['offset'] < offset + length  and i + 2 < len(tokens):
+                if t['content'] == 'case' and t['type'] == 'source.lang.swift.syntaxtype.keyword' and offset <= t['offset'] < offset + length and i + 2 < len(tokens):
                     key = tokens[i+1]
                     val = tokens[i+2]
                     a = (key['content'], val['content'])
                     cases.append(a)
+            return cases
+
+        def getCasesForAssociatedValues(filepath, offset, length):
+            tokens = sourcekitten_syntax(filepath) # FIXME: multiple loads
+            cases = []
+            i = 0
+            while i < len(tokens):
+                t = tokens[i]
+                i += 1
+                if t['content'] == 'case' and t['type'] == 'source.lang.swift.syntaxtype.keyword':
+                    t = tokens[i]
+                    caseLabel = None
+                    assocVals = []
+                    while i < len(tokens):
+                        t = tokens[i]
+                        if t['type'] == 'source.lang.swift.syntaxtype.keyword':
+                            break
+                        i += 1
+                        tk = t['content']
+                        ps = t['prevString']
+                        isType = ps.find(':') >= 0
+                        if caseLabel == None:
+                            caseLabel = tk
+                        elif isType:
+                            tp = assocVals[-1]
+                            assocVals[-1] = (tp[1], tk)
+                        else:
+                            tp = (None, tk)
+                            assocVals.append(tp)
+
+                    cases.append((caseLabel, assocVals))
             return cases
 
         self._filepath   = node['key.filepath']
@@ -238,33 +296,73 @@ class SwiftEnum():
 
         self._name              = node['key.name']
         self._parsedDeclaration = node['key.parsed_declaration']
-        self._cases = getCases(self._filepath, self._bodyOffset, self._bodyLength)
         self._inheritedTypes = map(lambda e: e['key.name'], node.get('key.inheritedtypes', []))
-        if len(self._inheritedTypes) == 0:
-            raise RuntimeError('Enum must have a row-type: ' + self._name)
+
+        if self.isRawType:
+            self._cases = getCasesForRawType(self._filepath, self._bodyOffset, self._bodyLength)
+        else:
+            self._cases = getCasesForAssociatedValues(self._filepath, self._bodyOffset, self._bodyLength)
 
         with file(self._filepath) as f:
             self._contents = f.read()[self._bodyOffset : self._bodyOffset + self._bodyLength]
 
-    def _getClassDeclarationString(self):
-        ps = [JSONDecodable(), JSONEncodable()]
+    def getDeclarationString(self, protocols):
+        ps = getMacroProtocolsByNames(protocols, self._inheritedTypes)
+        if len(ps) == 0:
+            ps = getDefaultMacroProtocol(protocols, 'EnumDefault')
 
-        pss = [i.protocolEnum for i in ps if i.protocolEnum != None]
-        inherited = ', '.join(pss)
-        if len(pss) > 0:
-            inherited = ', ' + inherited
+        rawType = self.getRawType(protocols)
 
-        ret = self._parsedDeclaration + inherited + ' {' + self._contents + '\n'
-        ret += '\n\n'.join(map(lambda e: e.processEnum(self), ps))
-        ret += '\n}\n'
+        typeInheritances = ([rawType] if rawType != None else []) + [i.protocolEnum for i in ps if i.protocolEnum != None]
+        processedProtocols = filter(lambda e: e != None, map(lambda e: e.processEnum(self, rawType), ps))
+
+        ret = 'public enum ' + self._name
+        if len(typeInheritances) > 0:
+            ret += ': ' + ', '.join(typeInheritances)
+        ret += ' {'
+        ret += self._contents
+        if len(processedProtocols) > 0:
+            ret += '\n'
+            ret += '\n\n'.join(processedProtocols)
+            ret += '\n'
+        ret += '}\n'
         return ret
 
     @property
     def name(self):
         return self._name
 
+    @property
+    def isRawType(self):
+        if len(self._inheritedTypes) > 0:
+            n = self._inheritedTypes[0]
+            return n in ['String', 'Int', 'Float', 'Character'] # FIXME: naive guess
+        return False
+
+    def getRawType(self, protocols):
+        if len(self._inheritedTypes) > 0:
+            n = self._inheritedTypes[0]
+            #return None if getMacroProtocolByName(protocols, n) else n
+            return n if self.isRawType else None
+
+
+class SwiftProtocol():
+    def __init__(self, node):
+        self._name              = node['key.name']
+        self._parsedDeclaration = node['key.parsed_declaration']
+        self._inheritedTypes = map(lambda e: e['key.name'], node.get('key.inheritedtypes', []))
+        self._clazz = None
+
+    @property
+    def name(self):
+        return self._name
+
+    def setClass(self, clazz):
+        self._clazz = clazz
+
     def __repr__(self):
-        return self._getClassDeclarationString()
+        return self._name + '(' + str(self._clazz) + ') :- ' + ', '.join(self._inheritedTypes)
+
 
 
 class SwiftTypename():
@@ -310,7 +408,7 @@ def parseTypename(typename):
         return SwiftTypename(typename)
 
 
-class DefaultInit():
+class ClassInit():
     @property
     def protocolClass(self):
         return None
@@ -405,7 +503,8 @@ class JSONDecodable():
         lines += [ '    return (%s(%s), nil)'  % (swiftClass.name, inits), '}' ]
         return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
 
-    def processEnum(self, swiftEnum):
+    def processEnum(self, swiftEnum, rawType):
+        assert(rawType != None)
         # FIXME: always public
         lines = [
             'public static func parseJSON(data: AnyObject) -> (decoded: %s?, error: String?) {' % (swiftEnum.name),
@@ -450,7 +549,8 @@ class JSONEncodable():
         ]
         return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
 
-    def processEnum(self, swiftEnum):
+    def processEnum(self, swiftEnum, rawType):
+        assert(rawType != None)
         # FIXME: always public
         lines = [
             'public func toJSON() -> %s {' % (swiftEnum._inheritedTypes[0]), # FIXME: private access
@@ -479,6 +579,60 @@ class Printable():
             '}'
         ]
         return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
+
+    def processEnum(self, swiftEnum, rawType):
+        if rawType != None:
+            return '    public var description: String { return rawValue }'
+        else:
+            def getCaseString(e):
+                caseLabel, assocVals = e
+                ais = map(lambda x: '%s=\(v.%s)' % (x[0][0], x[1]) if x[0][0] else '\(v.%d)' % x[1], zip(assocVals, range(len(assocVals))))
+                vo = ", ".join(ais)
+                return '    case .%s(let v): return "%s(%s)"' % (caseLabel, caseLabel, vo)
+
+            lines = [
+                'public var description: String {',
+                '    switch self {',
+            ]
+            lines += map(getCaseString, swiftEnum._cases)
+            lines += [
+                '    }',
+                '}'
+            ]
+            return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
+
+
+class EnumStaticInit():
+    @property
+    def protocolClass(self):
+        return None
+
+    @property
+    def protocolEnum(self):
+        return None
+
+    def processClass(self, swiftClass):
+        return None
+
+    def processEnum(self, swiftEnum, rawType):
+        if rawType != None:
+            return None # FIXME
+        else:
+            def getCaseString(e):
+                caseLabel, assocVals = e
+                # FIXME: check optional
+                ais = map(lambda x: '%s: %s = %s()' % (x[0][0], x[0][1], x[0][1]) if x[0][0] else 'arg%d: %s = %s()' % (x[1], x[0][1], x[0][1]), zip(assocVals, range(len(assocVals))))
+                cis = map(lambda x: '%s: %s' % (x[0][0], x[0][0]) if x[0][0] else 'arg%d' % (x[1],), zip(assocVals, range(len(assocVals))))
+
+                ret = [
+                    'public static func make%s(%s) -> %s {' % (caseLabel, ", ".join(ais), swiftEnum.name),
+                    '    return .%s(%s)' % (caseLabel, ", ".join(cis)),
+                    '}'
+                ]
+                return ret
+
+            lines = sum(map(getCaseString, swiftEnum._cases), [])
+            return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
 
 
 def visitSubstructure(func, sublist, initial, level = 0):
@@ -510,10 +664,27 @@ def getClassOrEnum(a, n):
     else:
         return a
 
+# FIXME: check Inner or inherit protocols and report error
+def getherMacroProtocol(a, n):
+    if n.get('key.kind', None) == 'source.lang.swift.decl.protocol':
+        return a + [SwiftProtocol(n)]
+    else:
+        return a
+
+def setMacroProtocolToClass(protocols):
+    g = globals()
+    for p in protocols:
+        c = g.get(p.name, None)
+        if c:
+            p.setClass(c)
+
+
 
 parsed = sourcekitten_doc()
+classOrEnums = visitSubstructure(getClassOrEnum, parsed, [])
+protocols = visitSubstructure(getherMacroProtocol, parsed, [])
+setMacroProtocolToClass(protocols)
 
-info = visitSubstructure(getClassOrEnum, parsed, [])
 
 print('// This file was auto-generated by Swift-IDL.\n')
-map(print, info)
+map(lambda e: print(e.getDeclarationString(protocols)), classOrEnums)
