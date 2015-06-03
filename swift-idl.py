@@ -263,18 +263,24 @@ class SwiftEnum():
             tokens = sourcekitten_syntax(filepath) # FIXME: multiple loads
             cases = []
             i = 0
-            while i < len(tokens):
+            while True:
                 t = tokens[i]
+                if t['offset'] > offset + length: break
+
                 i += 1
                 if t['content'] == 'case' and t['type'] == 'source.lang.swift.syntaxtype.keyword':
                     t = tokens[i]
                     caseLabel = None
                     assocVals = []
-                    while i < len(tokens):
+                    while True:
                         t = tokens[i]
-                        if t['type'] == 'source.lang.swift.syntaxtype.keyword':
-                            break
+                        if t['offset'] > offset + length: break
+
+                        if t['type'] == 'source.lang.swift.syntaxtype.keyword': break
+
                         i += 1
+                        if t['type'] == 'source.lang.swift.syntaxtype.comment': continue
+
                         tk = t['content']
                         ps = t['prevString']
                         isType = ps.find(':') >= 0
@@ -626,7 +632,7 @@ class EnumStaticInit():
 
                 ret = [
                     'public static func make%s(%s) -> %s {' % (caseLabel, ", ".join(ais), swiftEnum.name),
-                    '    return .%s(%s)' % (caseLabel, ", ".join(cis)),
+                    '    return .%s%s' % (caseLabel, '(' + ', '.join(cis) + ')' if len(cis) > 0 else ''),
                     '}'
                 ]
                 return ret
