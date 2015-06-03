@@ -247,53 +247,16 @@ class SwiftVariable():
 
 class SwiftEnum():
     def __init__(self, node):
-        def getCasesForRawType(filepath, offset, length):
+        def getCases(filepath, offset, length):
             tokens = sourcekitten_syntax(filepath) # FIXME: multiple loads
             cases = []
             for i in range(len(tokens)):
                 t = tokens[i]
-                if t['content'] == 'case' and t['type'] == 'source.lang.swift.syntaxtype.keyword' and offset <= t['offset'] < offset + length and i + 2 < len(tokens):
-                    key = tokens[i+1]
-                    val = tokens[i+2]
-                    a = (key['content'], val['content'])
-                    cases.append(a)
-            return cases
+                if t['offset'] < offset: continue
+                if t['offset'] >= offset + length: break
 
-        def getCasesForAssociatedValues(filepath, offset, length):
-            tokens = sourcekitten_syntax(filepath) # FIXME: multiple loads
-            cases = []
-            i = 0
-            while True:
-                t = tokens[i]
-                if t['offset'] > offset + length: break
-
-                i += 1
                 if t['content'] == 'case' and t['type'] == 'source.lang.swift.syntaxtype.keyword':
-                    t = tokens[i]
-                    caseLabel = None
-                    assocVals = []
-                    while True:
-                        t = tokens[i]
-                        if t['offset'] > offset + length: break
-
-                        if t['type'] == 'source.lang.swift.syntaxtype.keyword': break
-
-                        i += 1
-                        if t['type'] == 'source.lang.swift.syntaxtype.comment': continue
-
-                        tk = t['content']
-                        ps = t['prevString']
-                        isType = ps.find(':') >= 0
-                        if caseLabel == None:
-                            caseLabel = tk
-                        elif isType:
-                            tp = assocVals[-1]
-                            assocVals[-1] = (tp[1], tk)
-                        else:
-                            tp = (None, tk)
-                            assocVals.append(tp)
-
-                    cases.append((caseLabel, assocVals))
+                    cases.append(SwiftCase(tokens, i + 1, offset, length))
             return cases
 
         self._filepath   = node['key.filepath']
@@ -304,10 +267,7 @@ class SwiftEnum():
         self._parsedDeclaration = node['key.parsed_declaration']
         self._inheritedTypes = map(lambda e: e['key.name'], node.get('key.inheritedtypes', []))
 
-        if self.isRawType:
-            self._cases = getCasesForRawType(self._filepath, self._bodyOffset, self._bodyLength)
-        else:
-            self._cases = getCasesForAssociatedValues(self._filepath, self._bodyOffset, self._bodyLength)
+        self._cases = getCases(self._filepath, self._bodyOffset, self._bodyLength)
 
         with file(self._filepath) as f:
             self._contents = f.read()[self._bodyOffset : self._bodyOffset + self._bodyLength]
@@ -350,6 +310,50 @@ class SwiftEnum():
             n = self._inheritedTypes[0]
             #return None if getMacroProtocolByName(protocols, n) else n
             return n if self.isRawType else None
+
+
+class SwiftCase():
+    def __init__(self, tokens, pos, offset, length):
+        self._label = None
+        self._value = None
+        self._assocVals = []
+        self._annotations = {}
+
+        t = tokens[pos]
+        lineNumber = t['lineNumber']
+        while t['offset'] < offset + length:
+            if t['type'] == 'source.lang.swift.syntaxtype.keyword': break
+            if t['type'] == 'source.lang.swift.syntaxtype.comment':
+                ln = t['lineNumber']
+                if ln == lineNumber:
+                    content = t['content']
+                    cs = content.split('//')
+                    if len(cs) >= 2:
+                        # the first comment area is only checked
+                        self._annotations = parseAnnotation(unicode(cs[1]))
+            else:
+                tk = t['content']
+                ps = t['prevString']
+                isType = ps.find(':') >= 0
+                isValue = ps.find('=') >= 0
+                if self._label == None:
+                    self._label = tk # first-element
+                elif isValue:
+                    self._value = tk
+                elif isType:
+                    tp = self._assocVals[-1]
+                    self._assocVals[-1] = (tp[1], tk)
+                else:
+                    tp = (None, tk)
+                    self._assocVals.append(tp)
+
+            pos += 1
+            t = tokens[pos]
+
+    def __repr__(self):
+        return str(self._label) + '=' + str(self._value) + ': ' + ', '.join(map(lambda e: str, self._assocVals)) + str(self._annotations)
+
+
 
 
 class SwiftProtocol():
@@ -590,11 +594,11 @@ class Printable():
         if rawType != None:
             return '    public var description: String { return rawValue }'
         else:
-            def getCaseString(e):
-                caseLabel, assocVals = e
+            def getCaseString(case):
+                assocVals = case._assocVals # FIXME
                 ais = map(lambda x: '%s=\(v.%s)' % (x[0][0], x[1]) if x[0][0] else '\(v.%d)' % x[1], zip(assocVals, range(len(assocVals))))
-                vo = ", ".join(ais)
-                return '    case .%s(let v): return "%s(%s)"' % (caseLabel, caseLabel, vo)
+                vo = '(' + ', '.join(ais) + ')' if len(ais) > 0 else ''
+                return '    case .%s%s: return "%s%s"' % (case._label, '(let v)' if len(ais) > 0 else '', case._label, vo) # FIXME
 
             lines = [
                 'public var description: String {',
@@ -624,21 +628,78 @@ class EnumStaticInit():
         if rawType != None:
             return None # FIXME
         else:
-            def getCaseString(e):
-                caseLabel, assocVals = e
+            def getCaseString(case):
+                assocVals = case._assocVals # FIXME
                 # FIXME: check optional
                 ais = map(lambda x: '%s: %s = %s()' % (x[0][0], x[0][1], x[0][1]) if x[0][0] else 'arg%d: %s = %s()' % (x[1], x[0][1], x[0][1]), zip(assocVals, range(len(assocVals))))
                 cis = map(lambda x: '%s: %s' % (x[0][0], x[0][0]) if x[0][0] else 'arg%d' % (x[1],), zip(assocVals, range(len(assocVals))))
 
                 ret = [
-                    'public static func make%s(%s) -> %s {' % (caseLabel, ", ".join(ais), swiftEnum.name),
-                    '    return .%s%s' % (caseLabel, '(' + ', '.join(cis) + ')' if len(cis) > 0 else ''),
+                    'public static func make%s(%s) -> %s {' % (case._label, ", ".join(ais), swiftEnum.name),
+                    '    return .%s%s' % (case._label, '(' + ', '.join(cis) + ')' if len(cis) > 0 else ''),
                     '}'
                 ]
                 return ret
 
             lines = sum(map(getCaseString, swiftEnum._cases), [])
             return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
+
+
+class URLRequestHelper():
+    @property
+    def protocolClass(self):
+        return None
+
+    @property
+    def protocolEnum(self):
+        return None
+
+    def processClass(self, swiftClass):
+        return None
+
+    def processEnum(self, swiftEnum, rawType):
+        if rawType != None:
+            return None # FIXME
+        else:
+            def getMethodString():
+                def getMethod(case):
+                    anon_dic = case._annotations # FIXME: private access
+                    annons = anon_dic.get('router', [''])
+                    method = (annons[0] if annons[0] != '' else 'GET') if len(annons) >= 1 else 'GET'
+                    return '    case .%s: return "%s"' %  (case._label, method)
+
+                lines = [
+                    'public var method: String {',
+                    '    switch self {',
+                ]
+                lines += map(getMethod, swiftEnum._cases)
+                lines += [
+                    '    }',
+                    '}',
+                ]
+                return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
+
+            def getPathString():
+                def getPath(case):
+                    # FIXME: check args
+                    anon_dic = case._annotations # FIXME: private access
+                    annons = anon_dic.get('router', [''])
+                    path = annons[1] if len(annons) > 1 else ''
+                    params = ''
+                    return '    case .%s: return "%s"' %  (case._label, path)
+
+                lines = [
+                    'public var path: String {',
+                    '    switch self {',
+                ]
+                lines += map(getPath, swiftEnum._cases)
+                lines += [
+                    '    }',
+                    '}',
+                ]
+                return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
+
+            return getMethodString() + '\n' + getPathString()
 
 
 def visitSubstructure(func, sublist, initial, level = 0):
