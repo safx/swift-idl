@@ -65,12 +65,22 @@ def sourcekitten_syntax(filepath):
             return offset + length
         return func
 
+    def addNextString(contents):
+        def func(a, c):
+            if a:
+                p = a['offset'] + a['length']
+                offset = c['offset']
+                a['nextString'] = contents[p:offset]
+            return c
+        return func
+
     def addAdditionalInfo(s):
         with file(filepath) as f:
             contents = f.read()
             map(addContent(contents), s)
             map(addLineNumber(contents), s)
             reduce(addPrevString(contents), s, 0)
+            reduce(addNextString(contents), s, None)
             return s
 
     p = subprocess.Popen([SOURCEKITTEN, 'syntax', '--file', filepath], stdout=subprocess.PIPE)
@@ -336,18 +346,23 @@ class SwiftCase():
                 ps = t['prevString']
                 isType = ps.find(':') >= 0
                 isValue = ps.find('=') >= 0
+                # `sourcekitten syntax` doesn't contain any token of array or optional. So we have to guess roughly...
+                isArray = ps.find('[') > ps.find(':') >= 0
+
                 if self._label == None:
                     self._label = tk # first-element
                 elif isValue:
                     self._value = tk
                 elif isType:
                     tp = self._assocVals[-1]
+                    if isArray: tk = '[' + tk + ']'
                     self._assocVals[-1] = (tp[1], tk)
                 else:
                     tp = (None, tk)
                     self._assocVals.append(tp)
 
             pos += 1
+            if pos >= len(tokens): break
             t = tokens[pos]
 
     def __repr__(self):
@@ -661,8 +676,17 @@ class URLRequestHelper():
         if rawType != None:
             return None # FIXME
         else:
+            def getPath(case):
+                # FIXME: check args
+                anon_dic = case._annotations # FIXME: private access
+                annons = anon_dic.get('router', [''])
+                return annons[1] if len(annons) > 1 else ''
+
+            def getUsedParamNamesForPath(case):
+                return re.findall(r'\(([^)]+)\)', getPath(case))
+
             def getMethodString():
-                def getMethod(case):
+                def getCaseMethodString(case):
                     anon_dic = case._annotations # FIXME: private access
                     annons = anon_dic.get('router', [''])
                     method = (annons[0] if annons[0] != '' else 'GET') if len(annons) >= 1 else 'GET'
@@ -672,7 +696,7 @@ class URLRequestHelper():
                     'public var method: String {',
                     '    switch self {',
                 ]
-                lines += map(getMethod, swiftEnum._cases)
+                lines += map(getCaseMethodString, swiftEnum._cases)
                 lines += [
                     '    }',
                     '}',
@@ -680,26 +704,59 @@ class URLRequestHelper():
                 return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
 
             def getPathString():
-                def getPath(case):
-                    # FIXME: check args
-                    anon_dic = case._annotations # FIXME: private access
-                    annons = anon_dic.get('router', [''])
-                    path = annons[1] if len(annons) > 1 else ''
-                    params = ''
-                    return '    case .%s: return "%s"' %  (case._label, path)
+                def getCasePathString(case):
+                    path = getPath(case)
+
+                    pathParams = set(getUsedParamNamesForPath(case))
+                    caseParams = set([i[0] for i in case._assocVals if i[0] != None])
+                    union = pathParams.intersection(caseParams)
+                    lets = [i if i in union else '_' for i in caseParams]
+                    letString = ('(let (' + ', '.join(lets) + '))') if len(union) > 0 else ''
+                    return '    case .%s%s: return "%s"' %  (case._label, letString, path)
 
                 lines = [
                     'public var path: String {',
                     '    switch self {',
                 ]
-                lines += map(getPath, swiftEnum._cases)
+                lines += map(getCasePathString, swiftEnum._cases)
                 lines += [
                     '    }',
                     '}',
                 ]
                 return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
 
-            return getMethodString() + '\n' + getPathString()
+            def getParamsString():
+                # FIXME
+                def toJsonString(info):
+                    nameSym, typeSym = info
+                    if typeSym[0] == '[': return nameSym + '.map { $0.toJSON() }'
+                    return nameSym + '.toJSON()'
+
+                def getCaseParamsString(case):
+                    pathParams = set(getUsedParamNamesForPath(case))
+                    caseParams = set([i[0] for i in case._assocVals if i[0] != None])
+                    diff = caseParams.difference(pathParams)
+
+                    lets = [i if i in diff else '_' for i in caseParams]
+                    letString = ('(let (' + ', '.join(lets) + '))') if len(diff) > 0 else ''
+
+                    dicx = [i for i in case._assocVals if i[0] in diff]
+                    dic = ', '.join(['"%s": %s' % (i[0], toJsonString(i)) for i in dicx])
+                    dic = '[:]' if len(dic) == 0 else '[' + dic + ']'
+                    return '    case .%s%s: return %s' %  (case._label, letString, dic)
+
+                lines = [
+                    'public var params: [String: AnyObject] {',
+                    '    switch self {',
+                ]
+                lines += map(getCaseParamsString, swiftEnum._cases)
+                lines += [
+                    '    }',
+                    '}',
+                ]
+                return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
+
+            return getMethodString() + '\n' + getPathString() + '\n' + getParamsString()
 
 
 def visitSubstructure(func, sublist, initial, level = 0):
