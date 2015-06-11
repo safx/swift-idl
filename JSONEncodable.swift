@@ -16,7 +16,7 @@ protocol JSONEncodable {
 
 extension NSURL {
     func toJSON() -> String {
-        return self.absoluteString!
+        return self.absoluteString
     }
 }
 

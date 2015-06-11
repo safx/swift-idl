@@ -468,45 +468,43 @@ class JSONDecodable():
                 'let {name}: {typename}',
                 'if let v: AnyObject = data["{jsonlabel}"] {{',
                 '    if let _ = v as? NSNull {{',
-                '        ' + ('{name} = {default}' if var.defaultValue else 'return (nil, "Null not allowed in \'{jsonlabel}\'")'),
+                '        ' + ('{name} = {default}' if var.defaultValue else 'throw JSONDecodeError.NonNullablle(key: "{jsonlabel}")'),
             ]
 
             if var.isArray:
                 ret += [
                     '    }} else if let array = v as? [AnyObject] {{',
                     '        var r: [{baseTypename}] = []',
-                    '        r.reserveCapacity(count(array))',
+                    '        r.reserveCapacity(array.count)',
                     '        for e in array {{',
                     '            if let _ = e as? NSNull {{',
-                    '                ' + ('r.append(nil)' if var.isArrayOfOptional else 'return (nil, "Null not allowed in \'{jsonlabel}\'")'),
+                    '                ' + ('r.append(nil)' if var.isArrayOfOptional else 'throw JSONDecodeError.NonNullablle(key: "{jsonlabel}")'),
                     '            }}',
                     '',
-                    '            let (casted, err) = {baseTypename}.parseJSON(e)',
-                    '            if let c = casted {{',
-                    '                r.append(c)',
-                    '            }} else {{',
-                    '                return (nil, err ?? "Type transformation failed in \'{jsonlabel}\'")',
+                    '            do {{',
+                    '                r.append(try {baseTypename}.parseJSON(e))',
+                    '            }} catch JSONDecodeError.ValueTranslationFailed {{',
+                    '                throw JSONDecodeError.TypeMismatch(key: "{jsonlabel}", type: "{baseTypename}")',
                     '            }}',
                     '        }}',
                     '        {name} = r',
                     '    }} else {{',
-                    '        return (nil, "Type transformation failed in \'{jsonlabel}\'")',
+                    '            throw JSONDecodeError.TypeMismatch(key: "{jsonlabel}", type: "Array")',
                 ]
             else:
                 ret += [
                     '    }} else {{',
-                    '        let (casted, err) = {baseTypename}.parseJSON(v)',
-                    '        if let c = casted {{',
-                    '            {name} = c',
-                    '        }} else {{',
-                    '            return (nil, err ?? "Type transformation failed in \'{jsonlabel}\'")',
+                    '        do {{',
+                    '            {name} = try {baseTypename}.parseJSON(v)',
+                    '        }} catch JSONDecodeError.ValueTranslationFailed {{',
+                    '            throw JSONDecodeError.TypeMismatch(key: "{jsonlabel}", type: "{baseTypename}")',
                     '        }}',
                 ]
 
             ret += [
                 '    }}',
                 '}} else {{',
-                '    ' + ('{name} = {default}' if var.defaultValue else 'return (nil, "Keyword not found: \'{jsonlabel}\'")'),
+                '    ' + ('{name} = {default}' if var.defaultValue else 'throw JSONDecodeError.MissingKey(key: "{jsonlabel}")'),
                 '}}',
                 ''
             ]
@@ -523,20 +521,20 @@ class JSONDecodable():
         # FIXME: always public
         inits = ', '.join(map(lambda p: '%s: %s' % (p.name, p.name), filter(lambda x: not JSONAnnotation(x).jsonOmitValue, swiftClass.variables)))
         # check whetherr other key-value exists if needed
-        lines = [ 'public class func parseJSON(data: AnyObject) -> (decoded: %s?, error: String?) {' % (swiftClass.name,) ]
+        lines = [ 'public class func parseJSON(data: AnyObject) throws -> %s {' % (swiftClass.name,) ]
         lines += sum(map(paramString, swiftClass.variables), [])
-        lines += [ '    return (%s(%s), nil)'  % (swiftClass.name, inits), '}' ]
+        lines += [ '    return %s(%s)'  % (swiftClass.name, inits), '}' ]
         return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
 
     def processEnum(self, swiftEnum, rawType):
         assert(rawType != None)
         # FIXME: always public
         lines = [
-            'public static func parseJSON(data: AnyObject) -> (decoded: %s?, error: String?) {' % (swiftEnum.name),
-            '    if let v = data as? %s {' % (swiftEnum._inheritedTypes[0]), # FIXME: private access
-            '        return (%s(rawValue: v), nil)' % (swiftEnum.name),
+            'public static func parseJSON(data: AnyObject) throws -> %s {' % (swiftEnum.name),
+            '    if let v = data as? %s, val = %s(rawValue: v) {' % (swiftEnum._inheritedTypes[0], swiftEnum.name), # FIXME: private access
+            '        return val',
             '    }',
-            '    return (nil, "Type transformation failed in %s")' % (swiftEnum.name),
+            '    throw JSONDecodeError.ValueTranslationFailed(type: "%s")' % (swiftEnum.name),
             '}'
         ]
         return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
@@ -557,7 +555,7 @@ class JSONEncodable():
             if an.jsonOmitValue:
                 return []
             elif var.isArray:
-                return ['"%s": map(%s%s) { $0.toJSON() },' % (an.jsonLabel, var.name, ' ?? []' if var.isOptional else '')]
+                return ['"%s": %s.map { $0.toJSON() },' % (an.jsonLabel, '(' + var.name + ' ?? [])' if var.isOptional else var.name)]
             elif var.isOptional:
                 return ['"%s": %s.map { $0.toJSON() } ?? NSNull(),' % (an.jsonLabel, var.name)]
             return ['"%s": %s.toJSON(),' % (an.jsonLabel, var.name)]
@@ -588,11 +586,11 @@ class JSONEncodable():
 class Printable():
     @property
     def protocolClass(self):
-        return 'Printable'
+        return 'CustomStringConvertible'
 
     @property
     def protocolEnum(self):
-        return 'Printable'
+        return 'CustomStringConvertible'
 
     def processClass(self, swiftClass):
         # FIXME: always public

@@ -10,74 +10,81 @@ import Foundation
 
 protocol JSONDecodable {
     typealias DecodedType = Self
-    static func parseJSON(data: AnyObject) -> (decoded: DecodedType?, error: String?)
+    static func parseJSON(data: AnyObject) throws -> DecodedType
+}
+
+enum JSONDecodeError: ErrorType {
+    case MissingKey(key: String)
+    case TypeMismatch(key: String, type: String)
+    case ValueTranslationFailed(type: String)
+    case NonNullablle(key: String)
 }
 
 // MARK:
 
 extension NSURL: JSONDecodable {
-    static func parseJSON(data: AnyObject) -> (decoded: NSURL?, error: String?) {
-        if let v = data as? String {
-            return (NSURL(string: v), nil)
+    static func parseJSON(data: AnyObject) throws -> NSURL {
+        if let v = data as? String, val = NSURL(string: v) {
+            return val
         }
-        return (nil, "Type translate failed in NSURL")
+        throw JSONDecodeError.ValueTranslationFailed(type: "NSURL")
     }
 }
 
 extension NSDate: JSONDecodable {
-    static func parseJSON(data: AnyObject) -> (decoded: NSDate?, error: String?) {
+    static func parseJSON(data: AnyObject) throws -> NSDate {
         if let v = data as? String {
             let dateFormatter = NSDateFormatter()
             dateFormatter.dateFormat = "yyyy-MM-dd"
             if let newDate = dateFormatter.dateFromString(v) {
-                return (newDate, nil)
+                return newDate
             }
         }
-        return (nil, "Type translate failed in NSDate")
+        throw JSONDecodeError.ValueTranslationFailed(type: "NSDate")
     }
 }
 
 extension String: JSONDecodable {
-    static func parseJSON(data: AnyObject) -> (decoded: String?, error: String?) {
+    static func parseJSON(data: AnyObject) throws -> String {
         if let v = data as? String {
-            return (v, nil)
+            return v
         }
-        return (nil, "Type translate failed in String")
+        throw JSONDecodeError.ValueTranslationFailed(type: "String")
     }
 }
 
 extension Float: JSONDecodable {
-    static func parseJSON(data: AnyObject) -> (decoded: Float?, error: String?) {
+    static func parseJSON(data: AnyObject) throws -> Float {
         if let v = data as? NSNumber {
-            return (v.floatValue, nil)
+            return v.floatValue
         }
-        return (nil, "Type translate failed in Float")
+        throw JSONDecodeError.ValueTranslationFailed(type: "Float")
     }
 }
 
 extension Int: JSONDecodable {
-    static func parseJSON(data: AnyObject) -> (decoded: Int?, error: String?) {
+    static func parseJSON(data: AnyObject) throws -> Int {
         if let v = data as? NSNumber {
-            return (v.integerValue, nil)
+            return v.integerValue
         }
-        return (nil, "Type translate failed in Int")
+        throw JSONDecodeError.ValueTranslationFailed(type: "Int")
     }
 }
 
 extension UInt: JSONDecodable {
-    static func parseJSON(data: AnyObject) -> (decoded: UInt?, error: String?) {
+    static func parseJSON(data: AnyObject) throws -> UInt {
         if let v = data as? NSNumber {
-            return (UInt(v.unsignedIntegerValue), nil)
+            return UInt(v.unsignedIntegerValue)
         }
-        return (nil, "Type translate failed in UInt")
+        throw JSONDecodeError.ValueTranslationFailed(type: "UInt")
     }
 }
 
 extension Bool: JSONDecodable {
-    static func parseJSON(data: AnyObject) -> (decoded: Bool?, error: String?) {
+    static func parseJSON(data: AnyObject) throws -> Bool {
         if let v = data as? NSNumber {
-            return (v.boolValue, nil)
+            return v.boolValue
         }
-        return (nil, "Type translate failed in Bool")
+        throw JSONDecodeError.ValueTranslationFailed(type: "Bool")
     }
 }
