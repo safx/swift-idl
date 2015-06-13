@@ -13,6 +13,39 @@ protocol JSONDecodable {
     static func parseJSON(data: AnyObject) throws -> DecodedType
 }
 
+extension JSONDecodable {
+    static func parseJSONArray(data: AnyObject) throws -> [Self.DecodedType] {
+        guard let array = data as? [AnyObject] else {
+            throw JSONDecodeError.ValueTranslationFailed(type: "Array")
+        }
+
+        var r: [Self.DecodedType] = []
+        r.reserveCapacity(array.count)
+        for e in array {
+            if e is NSNull {
+                throw JSONDecodeError.NonNullablle(key: "(ROOT)")
+            } else {
+                r.append(try! Self.parseJSON(e))
+            }
+        }
+        return r
+    }
+
+    static func parseJSONArrayForNullable(data: AnyObject) throws -> [Self.DecodedType?] {
+        guard let array = data as? [AnyObject] else {
+            throw JSONDecodeError.ValueTranslationFailed(type: "Array")
+        }
+
+        return array.map { e in
+            if e is NSNull {
+                return nil
+            } else {
+                return try! Self.parseJSON(e)
+            }
+        }
+    }
+}
+
 enum JSONDecodeError: ErrorType {
     case MissingKey(key: String)
     case TypeMismatch(key: String, type: String)

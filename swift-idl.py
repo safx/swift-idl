@@ -467,41 +467,27 @@ class JSONDecodable():
             ret = [
                 'let {name}: {typename}',
                 'if let v: AnyObject = data["{jsonlabel}"] {{',
-                '    if let _ = v as? NSNull {{',
+                '    if v is NSNull {{',
                 '        ' + ('{name} = {default}' if var.defaultValue else 'throw JSONDecodeError.NonNullablle(key: "{jsonlabel}")'),
+                '    }} else {{',
+                '        do {{',
             ]
 
             if var.isArray:
                 ret += [
-                    '    }} else if let array = v as? [AnyObject] {{',
-                    '        var r: [{baseTypename}] = []',
-                    '        r.reserveCapacity(array.count)',
-                    '        for e in array {{',
-                    '            if let _ = e as? NSNull {{',
-                    '                ' + ('r.append(nil)' if var.isArrayOfOptional else 'throw JSONDecodeError.NonNullablle(key: "{jsonlabel}")'),
-                    '            }}',
-                    '',
-                    '            do {{',
-                    '                r.append(try {baseTypename}.parseJSON(e))',
-                    '            }} catch JSONDecodeError.ValueTranslationFailed {{',
-                    '                throw JSONDecodeError.TypeMismatch(key: "{jsonlabel}", type: "{baseTypename}")',
-                    '            }}',
-                    '        }}',
-                    '        {name} = r',
-                    '    }} else {{',
-                    '            throw JSONDecodeError.TypeMismatch(key: "{jsonlabel}", type: "Array")',
+                    '            {name} = try {baseTypename}.%s(v)' % ('parseJSONArrayForNullable' if var.isArrayOfOptional else 'parseJSONArray',),
+                    '        }} catch JSONDecodeError.NonNullablle {{',
+                    '            throw JSONDecodeError.NonNullablle(key: "{jsonlabel}")',
                 ]
             else:
                 ret += [
-                    '    }} else {{',
-                    '        do {{',
                     '            {name} = try {baseTypename}.parseJSON(v)',
-                    '        }} catch JSONDecodeError.ValueTranslationFailed {{',
-                    '            throw JSONDecodeError.TypeMismatch(key: "{jsonlabel}", type: "{baseTypename}")',
-                    '        }}',
                 ]
 
             ret += [
+                '        }} catch JSONDecodeError.ValueTranslationFailed {{',
+                '            throw JSONDecodeError.TypeMismatch(key: "{jsonlabel}", type: "{baseTypename}")',
+                '        }}',
                 '    }}',
                 '}} else {{',
                 '    ' + ('{name} = {default}' if var.defaultValue else 'throw JSONDecodeError.MissingKey(key: "{jsonlabel}")'),
