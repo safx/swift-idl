@@ -257,14 +257,24 @@ class SwiftVariable():
 
 class SwiftEnum():
     def __init__(self, node):
-        def getCases(filepath, offset, length):
-            tokens = sourcekitten_syntax(filepath) # FIXME: multiple loads
-            cases = []
+        def tokenrange(tokens, offset, length):
+            start = None
+            end = len(tokens)
             for i in range(len(tokens)):
                 t = tokens[i]
                 if t['offset'] < offset: continue
-                if t['offset'] >= offset + length: break
+                if not start: start = i
+                if t['offset'] >= offset + length:
+                    end = i
+                    break
+            return range(start, end)
 
+        def getCases(tokens, offset, length):
+            cases = []
+            for i in tokenrange(tokens, offset, length):
+                t = tokens[i]
+                if t['content'] == 'enum' and t['type'] == 'source.lang.swift.syntaxtype.keyword':
+                    break # TODO: skip insteadof break
                 if t['content'] == 'case' and t['type'] == 'source.lang.swift.syntaxtype.keyword':
                     cases.append(SwiftCase(tokens, i + 1, offset, length))
             return cases
@@ -277,10 +287,13 @@ class SwiftEnum():
         self._parsedDeclaration = node['key.parsed_declaration']
         self._inheritedTypes = map(lambda e: e['key.name'], node.get('key.inheritedtypes', []))
 
-        self._cases = getCases(self._filepath, self._bodyOffset, self._bodyLength)
+        tokens = sourcekitten_syntax(self._filepath) # TODO: cache
+        self._cases = getCases(tokens, self._bodyOffset, self._bodyLength)
 
-        with file(self._filepath) as f:
-            self._contents = f.read()[self._bodyOffset : self._bodyOffset + self._bodyLength]
+        self._innerClassesOrEnums = []
+        subs = node.get('key.substructure', None)
+        if subs:
+            self._innerClassesOrEnums = visitSubstructure(getClassOrEnum, subs, [], 2)
 
     def getDeclarationString(self, protocols):
         ps = getMacroProtocolsByNames(protocols, self._inheritedTypes)
@@ -296,11 +309,21 @@ class SwiftEnum():
         if len(typeInheritances) > 0:
             ret += ': ' + ', '.join(typeInheritances)
         ret += ' {'
-        ret += self._contents
+
+        if len(self._cases) > 0:
+            ret += '\n'
+            for c in self._cases:
+                ret += '    case ' + str(c)
+                ret += '\n'
+
         if len(processedProtocols) > 0:
             ret += '\n'
             ret += '\n\n'.join(processedProtocols)
             ret += '\n'
+
+        if len(self._innerClassesOrEnums) > 0:
+            sub = map(lambda e: e.getDeclarationString(protocols), self._innerClassesOrEnums)
+            ret = reduce(lambda a, e: a + e, sub, ret + '\n')
         ret += '}\n'
         return ret
 
@@ -366,7 +389,13 @@ class SwiftCase():
             t = tokens[pos]
 
     def __repr__(self):
-        return str(self._label) + '=' + str(self._value) + ': ' + ', '.join(map(lambda e: str, self._assocVals)) + str(self._annotations)
+        if self._value:
+            return str(self._label) + '=' + str(self._value)
+        else:
+            if len(self._assocVals) == 0:
+                return str(self._label)
+            else:
+                return str(self._label) + '(' + ', '.join(map(lambda e: e[0] + ': ' + e[1], self._assocVals)) + ')'
 
 
 
@@ -757,9 +786,9 @@ def visitSubstructure(func, sublist, initial, level = 0):
     else:
         for i in sublist:
             tmp = func(tmp, i)
-            subs = i.get('key.substructure', None)
-            if subs:
-                tmp = visitSubstructure(func, subs, tmp, level + 1)
+            #subs = i.get('key.substructure', None)
+            #if subs:
+            #    tmp = visitSubstructure(func, subs, tmp, level + 1)
     return tmp
 
 
