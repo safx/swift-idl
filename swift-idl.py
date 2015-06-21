@@ -89,6 +89,19 @@ def sourcekitten_syntax(filepath):
     return tokens
 
 
+def tokenrange(tokens, offset, length):
+    start = None
+    end = len(tokens)
+    for i in range(len(tokens)):
+        t = tokens[i]
+        if t['offset'] < offset: continue
+        if not start: start = i
+        if t['offset'] >= offset + length:
+            end = i
+            break
+    return range(start, end)
+
+
 def parseAnnotation(comment_part):
     def parseOne(s):
         m = re.match(r'^(\w+):"([^"]+)"$', s)
@@ -146,16 +159,15 @@ def getDefaultIdlProtocol(protocols, name = 'Default'):
 
 
 class SwiftClass():
-    def __init__(self, node):
-        self._filepath   = node['key.filepath']
+    def __init__(self, tokens, node):
         self._bodyOffset = node['key.bodyoffset']
         self._bodyLength = node['key.bodylength']
         self._name = node['key.name']
-        self._parsedDeclaration = node['key.parsed_declaration']
+        #self._parsedDeclaration = node['key.parsed_declaration']
 
         def getVariables(a, n):
             if n.get('key.kind', None) == 'source.lang.swift.decl.var.instance':
-                return a + [SwiftVariable(n)]
+                return a + [SwiftVariable(tokens, n)]
             return a
 
         self._variables = reduce(getVariables, node['key.substructure'], [])
@@ -192,14 +204,42 @@ class SwiftClass():
 
 
 class SwiftVariable():
-    def __init__(self, node):
+    def __init__(self, tokens, node):
         self._name              = node['key.name']
         self._typename          = node['key.typename']
-        self._parsedDeclaration = node['key.parsed_declaration']
+        #self._parsedDeclaration = node['key.parsed_declaration']
         self._defaultValue      = None
 
         self._annotations = {}
         self._parsedTypename = parseTypename(self._typename)
+
+        ## FIXME: parse for default value and annotations in comment
+        ttr = tokenrange(tokens, node['key.offset'], node['key.length'])
+        tts = [tokens[i] for i in ttr]
+        ttt = [(i['content'], i['nextString']) for i in tts]
+        # cut last element to '\n'
+        last = ttt[-1]
+        ln = last[1]
+        idx = ln.find('\n')
+        if idx >= 0:
+            ln = ln[:idx]
+        ttt[-1] = (last[0], ln)
+
+        self._parsedDeclaration = unicode(''.join([i[0] + i[1] for i in ttt]))
+
+        pos = ttr[-1] + 1
+        t = tokens[pos]
+        lineNumber = tts[-1]['lineNumber']
+        ln = t['lineNumber']
+
+        while lineNumber == ln:
+            if t['type'] != 'source.lang.swift.syntaxtype.comment':
+                break
+            self._parsedDeclaration += t['content']
+            pos += 1
+            t = tokens[pos]
+            ln = t['lineNumber']
+
         self._parseDeclaration()
 
         #print(self._name, self._defaultValue, self._jsonOmitValue, self.isOptional, self._parsedTypename)
@@ -252,23 +292,11 @@ class SwiftVariable():
     def parsedDeclarationWithoutDefaultValue(self):
         # FIXME: remove default value only
         s = self._parsedDeclaration.split('=')
-        return s[0].strip()
+        return 'public ' + s[0].strip()
 
 
 class SwiftEnum():
-    def __init__(self, node):
-        def tokenrange(tokens, offset, length):
-            start = None
-            end = len(tokens)
-            for i in range(len(tokens)):
-                t = tokens[i]
-                if t['offset'] < offset: continue
-                if not start: start = i
-                if t['offset'] >= offset + length:
-                    end = i
-                    break
-            return range(start, end)
-
+    def __init__(self, tokens, node):
         def getCases(tokens, offset, length):
             cases = []
             for i in tokenrange(tokens, offset, length):
@@ -279,15 +307,15 @@ class SwiftEnum():
                     cases.append(SwiftCase(tokens, i + 1, offset, length))
             return cases
 
-        self._filepath   = node['key.filepath']
+        #self._filepath   = filename
         self._bodyOffset = node['key.bodyoffset']
         self._bodyLength = node['key.bodylength']
 
         self._name              = node['key.name']
-        self._parsedDeclaration = node['key.parsed_declaration']
+        #self._parsedDeclaration = node['key.parsed_declaration']
         self._inheritedTypes = map(lambda e: e['key.name'], node.get('key.inheritedtypes', []))
 
-        tokens = sourcekitten_syntax(self._filepath) # TODO: cache
+        #tokens = sourcekitten_syntax(self._filepath) # TODO: cache
         self._cases = getCases(tokens, self._bodyOffset, self._bodyLength)
 
         self._innerClassesOrEnums = []
@@ -390,7 +418,7 @@ class SwiftCase():
 
     def __repr__(self):
         if self._value:
-            return str(self._label) + '=' + str(self._value)
+            return str(self._label) + ' = ' + str(self._value)
         else:
             if len(self._assocVals) == 0:
                 return str(self._label)
@@ -401,9 +429,9 @@ class SwiftCase():
 
 
 class SwiftProtocol():
-    def __init__(self, node):
+    def __init__(self, tokens, node):
         self._name              = node['key.name']
-        self._parsedDeclaration = node['key.parsed_declaration']
+        #self._parsedDeclaration = node['key.parsed_declaration']
         self._inheritedTypes = map(lambda e: e['key.name'], node.get('key.inheritedtypes', []))
         self._clazz = None
 
@@ -772,36 +800,37 @@ class URLRequestHelper():
             return getMethodString() + '\n' + getPathString() + '\n' + getParamsString()
 
 
-def visitSubstructure(func, sublist, initial, level = 0):
-    tmp = initial
+def parseProject(func, parsed_doc):
+    tmp = []
 
-    if level == 0: # Array
-        for i in sublist:
-            tmp = visitSubstructure(func, i, tmp, level + 1)
-    elif level == 1: # Dict(File:Dict)
-        for i in sublist:
-            subs = sublist[i].get('key.substructure', None)
+    for i in parsed_doc:
+        for (filepath, v) in i.items():
+            tokens = sourcekitten_syntax(filepath)
+            subs = v.get('key.substructure', None)
             if subs:
-                tmp = visitSubstructure(func, subs, tmp, level + 1)
-    else:
-        for i in sublist:
-            tmp = func(tmp, i)
+                tmp = visitSubstructure(func, tokens, subs, tmp)
+    return tmp
+
+def visitSubstructure(func, tokens, sublist, initial):
+    tmp = initial
+    for i in sublist:
+        tmp = func(tokens, tmp, i)
     return tmp
 
 
 # FIXME: Inner or inherit classes are not supported
-def getClassOrEnum(a, n):
+def getClassOrEnum(tokens, a, n):
     if n.get('key.kind', None) == 'source.lang.swift.decl.class':
-        return a + [SwiftClass(n)]
+        return a + [SwiftClass(tokens, n)]
     elif n.get('key.kind', None) == 'source.lang.swift.decl.enum':
-        return a + [SwiftEnum(n)]
+        return a + [SwiftEnum(tokens, n)]
     else:
         return a
 
 # FIXME: check Inner or inherit protocols and report error
-def getherIdlProtocol(a, n):
+def getherIdlProtocol(tokens, a, n):
     if n.get('key.kind', None) == 'source.lang.swift.decl.protocol':
-        return a + [SwiftProtocol(n)]
+        return a + [SwiftProtocol(tokens, n)]
     else:
         return a
 
@@ -815,8 +844,11 @@ def setIdlProtocolToClass(protocols):
 
 
 parsed = sourcekitten_doc()
-classOrEnums = visitSubstructure(getClassOrEnum, parsed, [])
-protocols = visitSubstructure(getherIdlProtocol, parsed, [])
+classOrEnums = parseProject(getClassOrEnum, parsed)
+protocols = parseProject(getherIdlProtocol, parsed)
+
+###classOrEnums = visitSubstructure(getClassOrEnum, parsed, [])
+###protocols = visitSubstructure(getherIdlProtocol, parsed, [])
 setIdlProtocolToClass(protocols)
 
 
