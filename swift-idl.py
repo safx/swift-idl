@@ -321,7 +321,7 @@ class SwiftEnum():
         self._innerClassesOrEnums = []
         subs = node.get('key.substructure', None)
         if subs:
-            self._innerClassesOrEnums = visitSubstructure(getClassOrEnum, subs, [], 2)
+            self._innerClassesOrEnums = visitSubstructure(getClassOrEnum, tokens, subs, [])
 
     def getDeclarationString(self, protocols):
         ps = getIdlProtocolsByNames(protocols, self._inheritedTypes)
