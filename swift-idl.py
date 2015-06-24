@@ -721,7 +721,7 @@ class URLRequestHelper():
                 # FIXME: check args
                 anon_dic = case._annotations # FIXME: private access
                 annons = anon_dic.get('router', [''])
-                return annons[1] if len(annons) > 1 else ''
+                return annons[1] if len(annons) > 1 else case._label # FIXME: private access
 
             def getUsedParamNamesForPath(case):
                 return re.findall(r'\(([^)]+)\)', getPath(case))
