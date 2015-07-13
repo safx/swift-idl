@@ -12,11 +12,10 @@ import subprocess
 SOURCEKITTEN='sourceKitten'
 
 # All classes and Enums in IDL.xcodeproj
-# * Class and Enum must not have any protocol.
-# * Enum must have a row-type.
-# * Inner class is not supported
+# * Class and Enum must not have any REAL protocol; Those are ignored.
+# * Inner class is not supported (Inner enum is supported)
 # * All methods are discarded in output
-# * All comments are discarded in output
+# * Many comments are discarded in output
 # * Generics is not supposed.
 
 # Supported types
@@ -81,6 +80,9 @@ def sourcekitten_syntax(filepath):
             map(addLineNumber(contents), s)
             reduce(addPrevString(contents), s, 0)
             reduce(addNextString(contents), s, None)
+
+            p = s[-1]['offset'] + s[-1]['length']
+            s[-1]['nextString'] = contents[p:-1]
             return s
 
     p = subprocess.Popen([SOURCEKITTEN, 'syntax', '--file', filepath], stdout=subprocess.PIPE)
@@ -92,7 +94,7 @@ def sourcekitten_syntax(filepath):
 def tokenrange(tokens, offset, length):
     start = None
     end = len(tokens)
-    for i in range(len(tokens)):
+    for i in range(end):
         t = tokens[i]
         if t['offset'] < offset: continue
         if not start: start = i
@@ -163,6 +165,7 @@ class SwiftClass():
         self._bodyOffset = node['key.bodyoffset']
         self._bodyLength = node['key.bodylength']
         self._name = node['key.name']
+        self.isStruct = node['key.kind'] == 'source.lang.swift.decl.struct'
         #self._parsedDeclaration = node['key.parsed_declaration']
 
         def getVariables(a, n):
@@ -181,7 +184,7 @@ class SwiftClass():
         typeInheritances = [i.protocolClass for i in ps if i.protocolClass != None]
 
         # FIXME: always public
-        ret = 'public class ' + self._name
+        ret = 'public ' + ('struct' if self.isStruct else 'class') + ' ' + self._name
         if len(typeInheritances) > 0:
             ret += ': ' + ', '.join(typeInheritances)
         ret += ' {\n'
@@ -193,6 +196,10 @@ class SwiftClass():
             ret += '\n'
         ret += '}\n'
         return ret
+
+    @property
+    def static(self):
+        return 'static' if self.isStruct else 'class'
 
     @property
     def name(self):
@@ -227,7 +234,7 @@ class SwiftVariable():
 
         self._parsedDeclaration = unicode(''.join([i[0] + i[1] for i in ttt]))
 
-        pos = ttr[-1] + 1
+        pos = min(ttr[-1] + 1, len(tokens) - 1)
         t = tokens[pos]
         lineNumber = tts[-1]['lineNumber']
         ln = t['lineNumber']
@@ -513,7 +520,7 @@ class JSONDecodable():
 
     @property
     def protocolEnum(self):
-        return None
+        return 'JSONDecodable'
 
     def processClass(self, swiftClass):
         def paramString(var):
@@ -564,23 +571,61 @@ class JSONDecodable():
         # FIXME: always public
         inits = ', '.join(map(lambda p: '%s: %s' % (p.name, p.name), filter(lambda x: not JSONAnnotation(x).jsonOmitValue, swiftClass.variables)))
         # check whetherr other key-value exists if needed
-        lines = [ 'public class func parseJSON(data: AnyObject) throws -> %s {' % (swiftClass.name,) ]
+        lines = [ 'public %s func parseJSON(data: AnyObject) throws -> %s {' % (swiftClass.static, swiftClass.name) ]
         lines += sum(map(paramString, swiftClass.variables), [])
         lines += [ '    return %s(%s)'  % (swiftClass.name, inits), '}' ]
         return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
 
     def processEnum(self, swiftEnum, rawType):
-        assert(rawType != None)
-        # FIXME: always public
-        lines = [
-            'public static func parseJSON(data: AnyObject) throws -> %s {' % (swiftEnum.name),
-            '    if let v = data as? %s, val = %s(rawValue: v) {' % (swiftEnum._inheritedTypes[0], swiftEnum.name), # FIXME: private access
-            '        return val',
-            '    }',
-            '    throw JSONDecodeError.ValueTranslationFailed(type: "%s")' % (swiftEnum.name),
-            '}'
-        ]
-        return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
+        if rawType:
+            lines = [
+                'public static func parseJSON(data: AnyObject) throws -> %s {' % (swiftEnum.name),
+                '    if let v = data as? %s, val = %s(rawValue: v) {' % (swiftEnum._inheritedTypes[0], swiftEnum.name), # FIXME: private access
+                '        return val',
+                '    }',
+                '    throw JSONDecodeError.ValueTranslationFailed(type: "%s")' % (swiftEnum.name),
+                '}'
+            ]
+            return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
+        else:
+            def getAssocString(key_and_type):
+                akey, atype = key_and_type
+                lines = [
+                    'let %s: %s' % (akey, atype),
+                    '    if let vo = obj["%s"], v = vo {' % (akey,),
+                    '        do {',
+                    '            %s = try %s.parseJSON(v)' % (akey, atype),
+                    '        } catch JSONDecodeError.ValueTranslationFailed {',
+                    '            throw JSONDecodeError.TypeMismatch(key: "%s", type: "%s")' % (akey, atype),
+                    '        }',
+                    '    } else {',
+                    '        throw JSONDecodeError.MissingKey(key: "%s")' % (akey,),
+                    '    }',
+                ]
+                return '\n'.join(map(lambda e: (' ' * 8) + e, lines))
+
+            def getCaseString(case):
+                assocVals = case._assocVals # FIXME
+                lines = [
+                    'if let obj: AnyObject = data["%s"] {' % (case._label,),
+                ]
+                lines += map(getAssocString, assocVals)
+                ais = map(lambda x: '%s: %s' % (x[0], x[0]) if x[0][0] else '\(v.%d)' % x[1], assocVals)
+                lines += [
+                    '        return .%s(%s)' % (case._label, ', '.join(ais)),
+                    '    }',
+                ]
+                return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
+
+            lines = [
+                'public static func parseJSON(data: AnyObject) throws -> %s {' % (swiftEnum.name),
+            ]
+            lines += map(getCaseString, swiftEnum._cases)
+            lines += [
+                '    throw JSONDecodeError.ValueTranslationFailed(type: "%s")' % (swiftEnum.name,),
+                '}'
+            ]
+            return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
 
 
 class JSONEncodable():
@@ -822,6 +867,8 @@ def visitSubstructure(func, tokens, sublist, initial):
 def getClassOrEnum(tokens, a, n):
     if n.get('key.kind', None) == 'source.lang.swift.decl.class':
         return a + [SwiftClass(tokens, n)]
+    elif n.get('key.kind', None) == 'source.lang.swift.decl.struct':
+        return a + [SwiftClass(tokens, n)]
     elif n.get('key.kind', None) == 'source.lang.swift.decl.enum':
         return a + [SwiftEnum(tokens, n)]
     else:
@@ -853,4 +900,5 @@ setIdlProtocolToClass(protocols)
 
 
 print('// This file was auto-generated by Swift-IDL.\n')
+print('import Foundation\n')
 map(lambda e: print(e.getDeclarationString(protocols)), classOrEnums)
