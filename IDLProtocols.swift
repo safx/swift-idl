@@ -6,6 +6,7 @@
 //  Copyright (c) 2015年 Safx Developers. All rights reserved.
 //
 
+protocol ErrorType {}
 protocol ClassInit {}
 protocol Printable {}
 protocol JSONEncodable {}

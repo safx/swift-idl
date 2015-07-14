@@ -13,14 +13,13 @@ SOURCEKITTEN='sourceKitten'
 
 # All classes and Enums in IDL.xcodeproj
 # * Class and Enum must not have any REAL protocol; Those are ignored.
-# * Inner class is not supported (Inner enum is supported)
 # * All methods are discarded in output
-# * Many comments are discarded in output
-# * Generics is not supposed.
+# * All comments are discarded in output
+# * All generic Types except Array and Optional are not supposed.
 
 # Supported types
 #     * Int, Float, Bool and String
-#     * Enum of String and Int
+#     * Enum
 #     * NSDate and NSURL
 #     * Optional and Array
 #     * User declared class in IDL.xcodeproj
@@ -32,6 +31,9 @@ SOURCEKITTEN='sourceKitten'
 #   let fooBee: Int     // json:",string"    (not supported currently)
 #   case Unknown        // json:"-"          (not supported currently)
 
+# Router
+#   case foo            // router:"POST"
+#   case bar(num: Int)  // router:",path/to/api"
 
 def sourcekitten_doc():
     p = subprocess.Popen([SOURCEKITTEN, 'doc', '-project', 'IDL.xcodeproj'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -176,6 +178,11 @@ class SwiftClass():
         self._variables = reduce(getVariables, node['key.substructure'], [])
         self._inheritedTypes = map(lambda e: e['key.name'], node.get('key.inheritedtypes', []))
 
+        self._innerClassesOrEnums = []
+        subs = node.get('key.substructure', None)
+        if subs:
+            self._innerClassesOrEnums = visitSubstructure(getClassOrEnum, tokens, subs, [])
+
     def getDeclarationString(self, protocols):
         ps = getIdlProtocolsByNames(protocols, self._inheritedTypes)
         if len(ps) == 0:
@@ -194,6 +201,9 @@ class SwiftClass():
             ret += '\n'
             ret += '\n\n'.join(map(lambda e: e.processClass(self), ps))
             ret += '\n'
+        if len(self._innerClassesOrEnums) > 0:
+            sub = map(lambda e: e.getDeclarationString(protocols), self._innerClassesOrEnums)
+            ret = reduce(lambda a, e: a + e, sub, ret + '\n')
         ret += '}\n'
         return ret
 
@@ -571,7 +581,13 @@ class JSONDecodable():
         # FIXME: always public
         inits = ', '.join(map(lambda p: '%s: %s' % (p.name, p.name), filter(lambda x: not JSONAnnotation(x).jsonOmitValue, swiftClass.variables)))
         # check whetherr other key-value exists if needed
-        lines = [ 'public %s func parseJSON(data: AnyObject) throws -> %s {' % (swiftClass.static, swiftClass.name) ]
+        lines = [
+            'public %s func parseJSON(data: AnyObject) throws -> %s {' % (swiftClass.static, swiftClass.name),
+            '    if !(data is NSDictionary) {',
+            '        throw JSONDecodeError.TypeMismatch(key: "%s", type: "NSDictionary")' % (swiftClass.name,),
+            '    }',
+            '',
+        ]
         lines += sum(map(paramString, swiftClass.variables), [])
         lines += [ '    return %s(%s)'  % (swiftClass.name, inits), '}' ]
         return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
@@ -670,6 +686,17 @@ class JSONEncodable():
         ]
         return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
 
+class ErrorType():
+    @property
+    def protocolClass(self):
+        assert('ErrorType is not allowed for Class')
+
+    @property
+    def protocolEnum(self):
+        return 'ErrorType'
+
+    def processEnum(self, swiftEnum, rawType):
+        return None
 
 class Printable():
     @property
@@ -775,7 +802,8 @@ class URLRequestHelper():
                 def getCaseMethodString(case):
                     anon_dic = case._annotations # FIXME: private access
                     annons = anon_dic.get('router', [''])
-                    method = (annons[0] if annons[0] != '' else 'GET') if len(annons) >= 1 else 'GET'
+                    method = (annons[0].upper() if annons[0] != '' else 'GET') if len(annons) >= 1 else 'GET'
+                    assert(method in ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'TRACE', 'CONNECT', 'OPTIONS'])
                     return '    case .%s: return "%s"' %  (case._label, method)
 
                 lines = [
