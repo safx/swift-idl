@@ -2,13 +2,14 @@
 
 from __future__ import print_function
 
+import argparse
 import functools
 import json
 import os
 import re
 import subprocess
 
-
+PROGRAM_NAME='swift-idl'
 SOURCEKITTEN='sourceKitten'
 
 # All classes and Enums in IDL.xcodeproj
@@ -16,6 +17,7 @@ SOURCEKITTEN='sourceKitten'
 # * All methods are discarded in output
 # * All comments are discarded in output
 # * All generic Types except Array and Optional are not supposed.
+# * Inherit class and enum are not supported
 
 # Supported types
 #     * Int, Float, Bool and String
@@ -35,8 +37,8 @@ SOURCEKITTEN='sourceKitten'
 #   case foo            // router:"POST"
 #   case bar(num: Int)  // router:",path/to/api"
 
-def sourcekitten_doc():
-    p = subprocess.Popen([SOURCEKITTEN, 'doc', '-project', 'IDL.xcodeproj'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+def sourcekitten_doc(project):
+    p = subprocess.Popen([SOURCEKITTEN, 'doc', '-project', project], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     (out, err) = p.communicate()
     return json.loads(out)
 
@@ -821,9 +823,11 @@ class URLRequestHelper():
                 def getCasePathString(case):
                     path = getPath(case)
 
-                    pathParams = set(getUsedParamNamesForPath(case))
-                    caseParams = set([i[0] for i in case._assocVals if i[0] != None])
-                    union = pathParams.intersection(caseParams)
+                    pathParamSet = set(getUsedParamNamesForPath(case))
+                    caseParams   = [i[0] for i in case._assocVals if i[0] != None]
+                    caseParamSet = set(caseParams)
+                    union = pathParamSet.intersection(caseParamSet)
+
                     lets = [i if i in union else '_' for i in caseParams]
                     letString = ('(let (' + ', '.join(lets) + '))') if len(union) > 0 else ''
                     return '    case .%s%s: return "%s"' %  (case._label, letString, path)
@@ -847,9 +851,10 @@ class URLRequestHelper():
                     return nameSym + '.toJSON()'
 
                 def getCaseParamsString(case):
-                    pathParams = set(getUsedParamNamesForPath(case))
-                    caseParams = set([i[0] for i in case._assocVals if i[0] != None])
-                    diff = caseParams.difference(pathParams)
+                    pathParamSet = set(getUsedParamNamesForPath(case))
+                    caseParams   = [i[0] for i in case._assocVals if i[0] != None]
+                    caseParamSet = set(caseParams)
+                    diff = caseParamSet.difference(pathParamSet)
 
                     lets = [i if i in diff else '_' for i in caseParams]
                     letString = ('(let (' + ', '.join(lets) + '))') if len(diff) > 0 else ''
@@ -873,16 +878,19 @@ class URLRequestHelper():
             return getMethodString() + '\n' + getPathString() + '\n' + getParamsString()
 
 
-def parseProject(func, parsed_doc):
-    tmp = []
+def processProject(func, parsed_doc):
+    def visit(filepath, contents):
+        sublist = contents.get('key.substructure', None)
+        tokens = sourcekitten_syntax(filepath) # FIXME
 
-    for i in parsed_doc:
-        for (filepath, v) in i.items():
-            tokens = sourcekitten_syntax(filepath)
-            subs = v.get('key.substructure', None)
-            if subs:
-                tmp = visitSubstructure(func, tokens, subs, tmp)
-    return tmp
+        tmp = []
+        for i in sublist:
+            tmp = func(tokens, tmp, i)
+        return tmp
+
+    assert(all([len(i) == 1 for i in parsed_doc]))
+    return {dic.keys()[0]:visit(*dic.items()[0]) for dic in parsed_doc}
+
 
 def visitSubstructure(func, tokens, sublist, initial):
     tmp = initial
@@ -891,42 +899,62 @@ def visitSubstructure(func, tokens, sublist, initial):
     return tmp
 
 
-# FIXME: Inner or inherit classes are not supported
 def getClassOrEnum(tokens, a, n):
-    if n.get('key.kind', None) == 'source.lang.swift.decl.class':
-        return a + [SwiftClass(tokens, n)]
-    elif n.get('key.kind', None) == 'source.lang.swift.decl.struct':
+    if n.get('key.kind', None) == 'source.lang.swift.decl.class' or n.get('key.kind', None) == 'source.lang.swift.decl.struct':
         return a + [SwiftClass(tokens, n)]
     elif n.get('key.kind', None) == 'source.lang.swift.decl.enum':
         return a + [SwiftEnum(tokens, n)]
     else:
         return a
 
-# FIXME: check Inner or inherit protocols and report error
-def getherIdlProtocol(tokens, a, n):
-    if n.get('key.kind', None) == 'source.lang.swift.decl.protocol':
-        return a + [SwiftProtocol(tokens, n)]
-    else:
-        return a
+def gatherIdlProtocol():
+    def getProtocol(tokens, a, n):
+        if n.get('key.kind', None) == 'source.lang.swift.decl.protocol':
+            return a + [SwiftProtocol(tokens, n)]
+        else:
+            return a
 
-def setIdlProtocolToClass(protocols):
-    g = globals()
-    for p in protocols:
-        c = g.get(p.name, None)
+    protocols = processProject(getProtocol, parsed)
+    flatprotos = sum(protocols.values(), [])
+
+    for p in flatprotos:
+        c = globals().get(p.name, None)
         if c:
             p.setClass(c)
 
+    return flatprotos
 
 
-parsed = sourcekitten_doc()
-classOrEnums = parseProject(getClassOrEnum, parsed)
-protocols = parseProject(getherIdlProtocol, parsed)
+parser = argparse.ArgumentParser(description=PROGRAM_NAME + ': Swift source generator from Swift')
+parser.add_argument('project', type=str, nargs='?', default='IDL.xcodeproj', help='project to parse')
+parser.add_argument('-o', '--output_dir', type=str, default='out', help='directory to output')
+parser.add_argument('-f', '--force', action='store_true', help='force to output')
+args = parser.parse_args()
 
-###classOrEnums = visitSubstructure(getClassOrEnum, parsed, [])
-###protocols = visitSubstructure(getherIdlProtocol, parsed, [])
-setIdlProtocolToClass(protocols)
+if not os.path.isdir(args.output_dir):
+    print('output directory not found: ' + args.output_dir)
+    exit(0)
 
+parsed = sourcekitten_doc(args.project)
+protocols = gatherIdlProtocol()
 
-print('// This file was auto-generated by Swift-IDL.\n')
-print('import Foundation\n')
-map(lambda e: print(e.getDeclarationString(protocols)), classOrEnums)
+classOrEnums = processProject(getClassOrEnum, parsed)
+
+for filepath, coe in classOrEnums.items():
+    if len(coe) == 0: continue
+    head, filename = os.path.split(filepath)
+
+    outpath = os.path.join(args.output_dir, filename)
+    exists = os.path.exists(outpath)
+    if not args.force and exists:
+        print('output file is already exists: ' + outpath)
+        exit(0)
+
+    with file(outpath, 'w') as out:
+        print(outpath + (' (overwritten)' if exists else ''))
+
+        out.write('// This file was auto-generated from %s with %s.' % (filename, PROGRAM_NAME))
+        out.write('\n\n')
+        out.write('import Foundation')
+        out.write('\n\n')
+        map(lambda e: out.write(e.getDeclarationString(protocols) + '\n\n'), coe)
