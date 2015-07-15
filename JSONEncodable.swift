@@ -8,52 +8,52 @@
 
 import Foundation
 
-protocol JSONEncodable {
+public protocol JSONEncodable {
     func toJSON() -> [String: AnyObject]
 }
 
 // MARK:
 
-extension NSURL {
-    func toJSON() -> String {
+public extension NSURL {
+    public func toJSON() -> String {
         return self.absoluteString
     }
 }
 
-extension NSDate {
-    func toJSON() -> String {
+public extension NSDate {
+    public func toJSON() -> String {
         let dateFormatter = NSDateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd"
         return dateFormatter.stringFromDate(self)
     }
 }
 
-extension String {
-    func toJSON() -> String {
+public extension String {
+    public func toJSON() -> String {
         return self
     }
 }
 
-extension Float {
-    func toJSON() -> NSNumber {
+public extension Float {
+    public func toJSON() -> NSNumber {
         return NSNumber(float: self)
     }
 }
 
-extension Int {
-    func toJSON() -> NSNumber {
+public extension Int {
+    public func toJSON() -> NSNumber {
         return NSNumber(integer: self)
     }
 }
 
-extension UInt {
-    func toJSON() -> NSNumber {
+public extension UInt {
+    public func toJSON() -> NSNumber {
         return NSNumber(unsignedLong: self)
     }
 }
 
-extension Bool {
-    func toJSON() -> NSNumber {
+public extension Bool {
+    public func toJSON() -> NSNumber {
         return NSNumber(bool: self)
     }
 }

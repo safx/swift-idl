@@ -8,12 +8,12 @@
 
 import Foundation
 
-protocol JSONDecodable {
+public protocol JSONDecodable {
     typealias DecodedType = Self
     static func parseJSON(data: AnyObject) throws -> DecodedType
 }
 
-extension JSONDecodable {
+public extension JSONDecodable {
     static func parseJSONArray(data: AnyObject) throws -> [Self.DecodedType] {
         guard let array = data as? [AnyObject] else {
             throw JSONDecodeError.ValueTranslationFailed(type: "Array")
@@ -25,7 +25,7 @@ extension JSONDecodable {
             if e is NSNull {
                 throw JSONDecodeError.NonNullablle(key: "(ROOT)")
             } else {
-                r.append(try! Self.parseJSON(e))
+                r.append(try Self.parseJSON(e))
             }
         }
         return r
@@ -36,27 +36,39 @@ extension JSONDecodable {
             throw JSONDecodeError.ValueTranslationFailed(type: "Array")
         }
 
-        return array.map { e in
+        var r: [Self.DecodedType?] = []
+        r.reserveCapacity(array.count)
+        for e in array {
             if e is NSNull {
-                return nil
+                r.append(nil)
             } else {
-                return try! Self.parseJSON(e)
+                r.append(try Self.parseJSON(e))
             }
         }
+        return r
     }
 }
 
-enum JSONDecodeError: ErrorType {
+public enum JSONDecodeError: ErrorType, CustomStringConvertible {
     case MissingKey(key: String)
     case TypeMismatch(key: String, type: String)
     case ValueTranslationFailed(type: String)
     case NonNullablle(key: String)
+
+    public var description: String {
+        switch self {
+        case .MissingKey(let v): return "MissingKey(key=\(v))"
+        case .TypeMismatch(let v): return "TypeMismatch(key=\(v.key), type=\(v.type))"
+        case .ValueTranslationFailed(let v): return "ValueTranslationFailed(type=\(v))"
+        case .NonNullablle(let v): return "NonNullablle(key=\(v))"
+        }
+    }
 }
 
 // MARK:
 
 extension NSURL: JSONDecodable {
-    static func parseJSON(data: AnyObject) throws -> NSURL {
+    public static func parseJSON(data: AnyObject) throws -> NSURL {
         if let v = data as? String, val = NSURL(string: v) {
             return val
         }
@@ -65,7 +77,7 @@ extension NSURL: JSONDecodable {
 }
 
 extension NSDate: JSONDecodable {
-    static func parseJSON(data: AnyObject) throws -> NSDate {
+    public static func parseJSON(data: AnyObject) throws -> NSDate {
         if let v = data as? String {
             let dateFormatter = NSDateFormatter()
             dateFormatter.dateFormat = "yyyy-MM-dd"
@@ -78,7 +90,7 @@ extension NSDate: JSONDecodable {
 }
 
 extension String: JSONDecodable {
-    static func parseJSON(data: AnyObject) throws -> String {
+    public static func parseJSON(data: AnyObject) throws -> String {
         if let v = data as? String {
             return v
         }
@@ -87,7 +99,7 @@ extension String: JSONDecodable {
 }
 
 extension Float: JSONDecodable {
-    static func parseJSON(data: AnyObject) throws -> Float {
+    public static func parseJSON(data: AnyObject) throws -> Float {
         if let v = data as? NSNumber {
             return v.floatValue
         }
@@ -96,7 +108,7 @@ extension Float: JSONDecodable {
 }
 
 extension Int: JSONDecodable {
-    static func parseJSON(data: AnyObject) throws -> Int {
+    public static func parseJSON(data: AnyObject) throws -> Int {
         if let v = data as? NSNumber {
             return v.integerValue
         }
@@ -105,7 +117,7 @@ extension Int: JSONDecodable {
 }
 
 extension UInt: JSONDecodable {
-    static func parseJSON(data: AnyObject) throws -> UInt {
+    public static func parseJSON(data: AnyObject) throws -> UInt {
         if let v = data as? NSNumber {
             return UInt(v.unsignedIntegerValue)
         }
@@ -114,7 +126,7 @@ extension UInt: JSONDecodable {
 }
 
 extension Bool: JSONDecodable {
-    static func parseJSON(data: AnyObject) throws -> Bool {
+    public static func parseJSON(data: AnyObject) throws -> Bool {
         if let v = data as? NSNumber {
             return v.boolValue
         }

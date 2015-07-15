@@ -412,12 +412,16 @@ class SwiftCase():
                         # the first comment area is only checked
                         self._annotations = parseAnnotation(unicode(cs[1]))
             else:
+                q = lambda st, ch: len(st) if st.find(ch) == -1 else st.find(ch)
+
                 tk = t['content']
                 ps = t['prevString']
+                ns = t['nextString']
                 isType = ps.find(':') >= 0
                 isValue = ps.find('=') >= 0
                 # `sourcekitten syntax` doesn't contain any token of array or optional. So we have to guess roughly...
-                isArray = ps.find('[') > ps.find(':') >= 0
+                isArray    = ps.find('[') > ps.find(':') >= 0
+                isOptional = 0 <= ns.find('?') < min(q(ns, ','), q(ns, ')'))
 
                 if self._label == None:
                     self._label = tk # first-element
@@ -425,10 +429,9 @@ class SwiftCase():
                     self._value = tk
                 elif isType:
                     tp = self._assocVals[-1]
-                    if isArray: tk = '[' + tk + ']'
-                    self._assocVals[-1] = (tp[1], tk)
+                    self._assocVals[-1] = SwiftCaseAssocValue(tp._typename, tk, isArray, isOptional)
                 else:
-                    tp = (None, tk)
+                    tp = SwiftCaseAssocValue(None, tk) # maybe changed
                     self._assocVals.append(tp)
 
             pos += 1
@@ -442,10 +445,22 @@ class SwiftCase():
             if len(self._assocVals) == 0:
                 return str(self._label)
             else:
-                return str(self._label) + '(' + ', '.join(map(lambda e: e[0] + ': ' + e[1], self._assocVals)) + ')'
+                return str(self._label) + '(' + ', '.join(map(lambda e: e._name + ': ' + e.typename, self._assocVals)) + ')'
 
 
+class SwiftCaseAssocValue():
+    def __init__(self, name, typename, isArray = False, isOptional = False):
+        self._name = name
+        self._typename = typename
+        self._isArray = isArray
+        self._isOptional = isOptional
 
+    @property
+    def typename(self):
+        tk = self._typename
+        if self._isArray: tk = '[' + tk + ']'
+        if self._isOptional: tk = tk + '?'
+        return tk
 
 class SwiftProtocol():
     def __init__(self, tokens, node):
@@ -726,7 +741,7 @@ class Printable():
         else:
             def getCaseString(case):
                 assocVals = case._assocVals # FIXME
-                ais = map(lambda x: '%s=\(v.%s)' % (x[0][0], x[1]) if x[0][0] else '\(v.%d)' % x[1], zip(assocVals, range(len(assocVals))))
+                ais = map(lambda x: '%s=\(v.%s)' % (x[0]._name, x[1]) if x[0]._name else '\(v.%d)' % x[1], zip(assocVals, range(len(assocVals))))
                 vo = '(' + ', '.join(ais) + ')' if len(ais) > 0 else ''
                 return '    case .%s%s: return "%s%s"' % (case._label, '(let v)' if len(ais) > 0 else '', case._label, vo) # FIXME
 
@@ -824,7 +839,7 @@ class URLRequestHelper():
                     path = getPath(case)
 
                     pathParamSet = set(getUsedParamNamesForPath(case))
-                    caseParams   = [i[0] for i in case._assocVals if i[0] != None]
+                    caseParams   = [i._name for i in case._assocVals if i._name != None]
                     caseParamSet = set(caseParams)
                     union = pathParamSet.intersection(caseParamSet)
 
@@ -846,23 +861,44 @@ class URLRequestHelper():
             def getParamsString():
                 # FIXME
                 def toJsonString(info):
-                    nameSym, typeSym = info
-                    if typeSym[0] == '[': return nameSym + '.map { $0.toJSON() }'
-                    return nameSym + '.toJSON()'
+                    if info._isArray: return info._name + '.map { $0.toJSON() }'
+                    return info._name + '.toJSON()'
 
                 def getCaseParamsString(case):
                     pathParamSet = set(getUsedParamNamesForPath(case))
-                    caseParams   = [i[0] for i in case._assocVals if i[0] != None]
+                    caseParams   = [i._name for i in case._assocVals if i._name != None]
                     caseParamSet = set(caseParams)
                     diff = caseParamSet.difference(pathParamSet)
 
                     lets = [i if i in diff else '_' for i in caseParams]
                     letString = ('(let (' + ', '.join(lets) + '))') if len(diff) > 0 else ''
 
-                    dicx = [i for i in case._assocVals if i[0] in diff]
-                    dic = ', '.join(['"%s": %s' % (i[0], toJsonString(i)) for i in dicx])
+                    dicx = [i for i in case._assocVals if i._name in diff]
+
+                    dic = ', '.join(['"%s": %s' % (i._name, toJsonString(i)) for i in dicx if not i._isOptional])
                     dic = '[:]' if len(dic) == 0 else '[' + dic + ']'
-                    return '    case .%s%s: return %s' %  (case._label, letString, dic)
+
+                    dicOpts = '\n            '.join(['%s.map { p["%s"] = $0.toJSON() }' % (i._name, i._name) for i in dicx if i._isOptional])
+                    dicOpts = '' if len(dicOpts) == 0 else '        ' + dicOpts
+
+                    lines = [
+                        'case .%s%s:' % (case._label, letString),
+                    ]
+                    if len(dicOpts) == 0:
+                        lines += [
+                            '        return ' + dic,
+                        ]
+                    else:
+                        lines += [
+                            '        var p: [String: AnyObject] = ' + dic,
+                        ]
+                        lines += [
+                            dicOpts,
+                        ]
+                        lines += [
+                            '        return p'
+                        ]
+                    return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
 
                 lines = [
                     'public var params: [String: AnyObject] {',
