@@ -37,8 +37,9 @@ SOURCEKITTEN='sourceKitten'
 #   case foo            // router:"POST"
 #   case bar(num: Int)  // router:",path/to/api"
 
-def sourcekitten_doc(project):
-    p = subprocess.Popen([SOURCEKITTEN, 'doc', '-project', project], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+def sourcekitten_doc(project, scheme):
+    args = [SOURCEKITTEN, 'doc', '-project', project, '-scheme', scheme]
+    p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     (out, err) = p.communicate()
     return json.loads(out)
 
@@ -170,7 +171,6 @@ class SwiftClass():
         self._bodyLength = node['key.bodylength']
         self._name = node['key.name']
         self.isStruct = node['key.kind'] == 'source.lang.swift.decl.struct'
-        #self._parsedDeclaration = node['key.parsed_declaration']
 
         def getVariables(a, n):
             if n.get('key.kind', None) == 'source.lang.swift.decl.var.instance':
@@ -226,7 +226,6 @@ class SwiftVariable():
     def __init__(self, tokens, node):
         self._name              = node['key.name']
         self._typename          = node['key.typename']
-        #self._parsedDeclaration = node['key.parsed_declaration']
         self._defaultValue      = None
 
         self._annotations = {}
@@ -260,8 +259,6 @@ class SwiftVariable():
             ln = t['lineNumber']
 
         self._parseDeclaration()
-
-        #print(self._name, self._defaultValue, self._jsonOmitValue, self.isOptional, self._parsedTypename)
 
     def _parseDeclaration(self):
         def parseDefaultValue(decl_part):
@@ -326,15 +323,12 @@ class SwiftEnum():
                     cases.append(SwiftCase(tokens, i + 1, offset, length))
             return cases
 
-        #self._filepath   = filename
         self._bodyOffset = node['key.bodyoffset']
         self._bodyLength = node['key.bodylength']
 
         self._name              = node['key.name']
-        #self._parsedDeclaration = node['key.parsed_declaration']
         self._inheritedTypes = map(lambda e: e['key.name'], node.get('key.inheritedtypes', []))
 
-        #tokens = sourcekitten_syntax(self._filepath) # TODO: cache
         self._cases = getCases(tokens, self._bodyOffset, self._bodyLength)
 
         self._innerClassesOrEnums = []
@@ -388,7 +382,6 @@ class SwiftEnum():
     def getRawType(self, protocols):
         if len(self._inheritedTypes) > 0:
             n = self._inheritedTypes[0]
-            #return None if getIdlProtocolByName(protocols, n) else n
             return n if self.isRawType else None
 
 
@@ -419,7 +412,7 @@ class SwiftCase():
                 ns = t['nextString']
                 isType = ps.find(':') >= 0
                 isValue = ps.find('=') >= 0
-                # `sourcekitten syntax` doesn't contain any token of array or optional. So we have to guess roughly...
+                # `sourcekitten syntax` doesn't contain any token of array and optional. So we have to guess roughly...
                 isArray    = ps.find('[') > ps.find(':') >= 0
                 isOptional = 0 <= ns.find('?') < min(q(ns, ','), q(ns, ')'))
 
@@ -431,7 +424,7 @@ class SwiftCase():
                     tp = self._assocVals[-1]
                     self._assocVals[-1] = SwiftCaseAssocValue(tp._typename, tk, isArray, isOptional)
                 else:
-                    tp = SwiftCaseAssocValue(None, tk) # maybe changed
+                    tp = SwiftCaseAssocValue(None, tk) # overridden when typename is taken
                     self._assocVals.append(tp)
 
             pos += 1
@@ -465,7 +458,6 @@ class SwiftCaseAssocValue():
 class SwiftProtocol():
     def __init__(self, tokens, node):
         self._name              = node['key.name']
-        #self._parsedDeclaration = node['key.parsed_declaration']
         self._inheritedTypes = map(lambda e: e['key.name'], node.get('key.inheritedtypes', []))
         self._clazz = None
 
@@ -776,8 +768,8 @@ class EnumStaticInit():
             def getCaseString(case):
                 assocVals = case._assocVals # FIXME
                 # FIXME: check optional
-                ais = map(lambda x: '%s: %s = %s()' % (x[0][0], x[0][1], x[0][1]) if x[0][0] else 'arg%d: %s = %s()' % (x[1], x[0][1], x[0][1]), zip(assocVals, range(len(assocVals))))
-                cis = map(lambda x: '%s: %s' % (x[0][0], x[0][0]) if x[0][0] else 'arg%d' % (x[1],), zip(assocVals, range(len(assocVals))))
+                ais = map(lambda x: '%s: %s = %s()' % (x[0]._name, x[0].typename, x[0].typename) if x[0]._name else 'arg%d: %s = %s()' % (x[1], x[0].typename, x[0].typename), zip(assocVals, range(len(assocVals))))
+                cis = map(lambda x: '%s: %s' % (x[0]._name, x[0]._name) if x[0]._name else 'arg%d' % (x[1],), zip(assocVals, range(len(assocVals))))
 
                 ret = [
                     'public static func make%s(%s) -> %s {' % (case._label, ", ".join(ais), swiftEnum.name),
@@ -917,7 +909,7 @@ class URLRequestHelper():
 def processProject(func, parsed_doc):
     def visit(filepath, contents):
         sublist = contents.get('key.substructure', None)
-        tokens = sourcekitten_syntax(filepath) # FIXME
+        tokens = sourcekitten_syntax(filepath)
 
         tmp = []
         for i in sublist:
@@ -963,6 +955,7 @@ def gatherIdlProtocol():
 
 parser = argparse.ArgumentParser(description=PROGRAM_NAME + ': Swift source generator from Swift')
 parser.add_argument('project', type=str, nargs='?', default='IDL.xcodeproj', help='project to parse')
+parser.add_argument('scheme', type=str, nargs='?', default='IDL', help='sceheme to parse')
 parser.add_argument('-o', '--output_dir', type=str, default='out', help='directory to output')
 parser.add_argument('-f', '--force', action='store_true', help='force to output')
 args = parser.parse_args()
@@ -971,7 +964,7 @@ if not os.path.isdir(args.output_dir):
     print('output directory not found: ' + args.output_dir)
     exit(0)
 
-parsed = sourcekitten_doc(args.project)
+parsed = sourcekitten_doc(args.project, args.scheme)
 protocols = gatherIdlProtocol()
 
 classOrEnums = processProject(getClassOrEnum, parsed)
@@ -983,7 +976,7 @@ for filepath, coe in classOrEnums.items():
     outpath = os.path.join(args.output_dir, filename)
     exists = os.path.exists(outpath)
     if not args.force and exists:
-        print('output file is already exists: ' + outpath)
+        print('Error: output file is already exists: ' + outpath)
         exit(0)
 
     with file(outpath, 'w') as out:
