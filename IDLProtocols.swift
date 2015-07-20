@@ -7,6 +7,7 @@
 //
 
 protocol ErrorType {}
+protocol NSCoding {}
 protocol ClassInit {}
 protocol Printable {}
 protocol JSONEncodable {}

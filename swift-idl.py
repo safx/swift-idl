@@ -698,7 +698,7 @@ class JSONEncodable():
 class ErrorType():
     @property
     def protocolClass(self):
-        assert('ErrorType is not allowed for Class')
+        assert('ErrorType is not allowed for class')
 
     @property
     def protocolEnum(self):
@@ -706,6 +706,75 @@ class ErrorType():
 
     def processEnum(self, swiftEnum, rawType):
         return None
+
+
+class NSCoding():
+    @property
+    def protocolClass(self):
+        return 'NSCoding'
+
+    @property
+    def protocolEnum(self):
+        assert('NSCoding is not allowed for enum')
+
+    def processClass(self, swiftClass):
+        def initWithCoder():
+            # FIXME: always public
+            assigns = []
+            lines = [
+                'required public init?(coder: NSCoder) {',
+                '    var failed = false',
+            ]
+
+            for v in swiftClass.variables:
+                lines += ['']
+                if v.typename == 'Int':
+                    lines += ['    %s = coder.decodeIntegerForKey("%s")' % (v.name, v.name)]
+                elif v.typename == 'Float':
+                    lines += ['    %s = coder.decodeFloatForKey("%s")' % (v.name, v.name)]
+                else:
+                    lines += [
+                        '    if let %s = coder.decodeObjectForKey("%s") as? %s {' % (v.name, v.name, v.typename),
+                        '        self.%s = %s' % (v.name, v.name),
+                        '    } else {',
+                        '        self.%s = %s()' % (v.name, v.typename),
+                        '        failed = true',
+                        '    }',
+                    ]
+
+            lines += assigns
+            lines += [
+                '',
+                '    if failed {',
+                '        return // nil',
+                '    }',
+                '}'
+            ]
+            return lines
+
+        def encodeWithCoder():
+            # FIXME: always public
+            params = ', '.join(map(lambda x: '%s=\(%s)' % (x.name, x.name), swiftClass.variables))
+            lines = [
+                'public func encodeWithCoder(coder: NSCoder) {',
+            ]
+
+            for v in swiftClass.variables:
+                if v.typename == 'Int':
+                    lines += ['    coder.encodeInteger(%s, forKey: "%s")' % (v.name, v.name)]
+                elif v.typename == 'Float':
+                    lines += ['    coder.encodeFloat(%s, forKey: "%s")' % (v.name, v.name)]
+                else:
+                    lines += ['    coder.encodeObject(%s, forKey: "%s")' % (v.name, v.name)]
+
+            lines += [
+                '}'
+            ]
+            return lines
+
+        lines = initWithCoder() + [''] + encodeWithCoder()
+        return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
+
 
 class Printable():
     @property
