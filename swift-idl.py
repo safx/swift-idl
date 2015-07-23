@@ -802,7 +802,7 @@ class Printable():
         else:
             def getCaseString(case):
                 assocVals = case._assocVals # FIXME
-                ais = map(lambda x: '%s=\(v.%s)' % (x[0]._name, x[1]) if x[0]._name else '\(v.%d)' % x[1], zip(assocVals, range(len(assocVals))))
+                ais = map(lambda x: '%s=\(v.%s)' % (x[1]._name, x[0]) if x[1]._name else '\(v.%d)' % x[0], enumerate(assocVals))
                 vo = '(' + ', '.join(ais) + ')' if len(ais) > 0 else ''
                 return '    case .%s%s: return "%s%s"' % (case._label, '(let v)' if len(ais) > 0 else '', case._label, vo) # FIXME
 
@@ -837,8 +837,8 @@ class EnumStaticInit():
             def getCaseString(case):
                 assocVals = case._assocVals # FIXME
                 # FIXME: check optional
-                ais = map(lambda x: '%s: %s = %s()' % (x[0]._name, x[0].typename, x[0].typename) if x[0]._name else 'arg%d: %s = %s()' % (x[1], x[0].typename, x[0].typename), zip(assocVals, range(len(assocVals))))
-                cis = map(lambda x: '%s: %s' % (x[0]._name, x[0]._name) if x[0]._name else 'arg%d' % (x[1],), zip(assocVals, range(len(assocVals))))
+                ais = map(lambda x: '%s: %s = %s()' % (x[1]._name, x[1].typename, x[1].typename) if x[1]._name else 'arg%d: %s = %s()' % (x[0], x[1].typename, x[1].typename), enumerate(assocVals))
+                cis = map(lambda x: '%s: %s' % (x[1]._name, x[1]._name) if x[1]._name else 'arg%d' % (x[0],), enumerate(assocVals))
 
                 ret = [
                     'public static func make%s(%s) -> %s {' % (case._label, ", ".join(ais), swiftEnum.name),
