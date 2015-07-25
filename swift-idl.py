@@ -802,9 +802,15 @@ class Printable():
         else:
             def getCaseString(case):
                 assocVals = case._assocVals # FIXME
-                ais = map(lambda x: '%s=\(v.%s)' % (x[1]._name, x[0]) if x[1]._name else '\(v.%d)' % x[0], enumerate(assocVals))
-                vo = '(' + ', '.join(ais) + ')' if len(ais) > 0 else ''
-                return '    case .%s%s: return "%s%s"' % (case._label, '(let v)' if len(ais) > 0 else '', case._label, vo) # FIXME
+                if len(assocVals) > 1:
+                    ais = map(lambda x: '%s=\(v.%s)' % (x[1]._name, x[0]) if x[1]._name else '\(v.%d)' % x[0], enumerate(assocVals))
+                    vo = '(' + ', '.join(ais) + ')'
+                elif len(assocVals) == 1:
+                    vo = '(%s=\(v))' % (assocVals[0]._name,)
+                else:
+                    vo = ''
+
+                return '    case .%s%s: return "%s%s"' % (case._label, '(let v)' if len(assocVals) > 0 else '', case._label, vo) # FIXME
 
             lines = [
                 'public var description: String {',
