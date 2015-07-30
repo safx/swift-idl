@@ -79,6 +79,7 @@ def sourcekitten_syntax(filepath):
         return func
 
     def addAdditionalInfo(s):
+        t = s[-1]
         with file(filepath) as f:
             contents = f.read()
             map(addContent(contents), s)
@@ -86,8 +87,8 @@ def sourcekitten_syntax(filepath):
             reduce(addPrevString(contents), s, 0)
             reduce(addNextString(contents), s, None)
 
-            p = s[-1]['offset'] + s[-1]['length']
-            s[-1]['nextString'] = contents[p:-1]
+            p = t['offset'] + t['length']
+            t['nextString'] = contents[p:-1]
             return s
 
     p = subprocess.Popen([SOURCEKITTEN, 'syntax', '--file', filepath], stdout=subprocess.PIPE)
@@ -142,6 +143,39 @@ class JSONAnnotation:
                 pass
             else:
                 raise RuntimeError('Unknown annotation: ' + i)
+
+
+class RouterAnnotation:
+    def __init__(self, case):
+        anon_dic = case._annotations # FIXME: private access
+        self._case = case
+        self.method = 'GET'
+        self.path = case._label # FIXME: private access
+
+        annons = anon_dic.get('router', [''])
+
+        if len(annons) > 0:
+            method = annons[0].upper()
+            if method != '':
+                assert(method in ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'TRACE', 'CONNECT', 'OPTIONS'])
+                self.method = method
+
+        if len(annons) > 1:
+            path = annons[1]
+            if path != '':
+                self.path = path
+
+    def paramSets(self):
+        pathParams = re.findall(r'\(([^)]+)\)', self.path)
+        caseParams = [i._name for i in self._case._assocVals if i._name != None]
+        return (pathParams, caseParams)
+
+    @property
+    def caseLetTuple(self):
+        pathParams, caseParams = self.paramSets()
+        union = set(pathParams).intersection(set(caseParams))
+        lets = [i if i in union else '_' for i in caseParams]
+        return ('(' + ', '.join(lets) + ')') if len(union) > 0 else ''
 
 
 def getIdlProtocolByName(protocols, name):
@@ -873,22 +907,10 @@ class URLRequestHelper():
         if rawType != None:
             return None # FIXME
         else:
-            def getPath(case):
-                # FIXME: check args
-                anon_dic = case._annotations # FIXME: private access
-                annons = anon_dic.get('router', [''])
-                return annons[1] if len(annons) > 1 else case._label # FIXME: private access
-
-            def getUsedParamNamesForPath(case):
-                return re.findall(r'\(([^)]+)\)', getPath(case))
-
             def getMethodString():
                 def getCaseMethodString(case):
-                    anon_dic = case._annotations # FIXME: private access
-                    annons = anon_dic.get('router', [''])
-                    method = (annons[0].upper() if annons[0] != '' else 'GET') if len(annons) >= 1 else 'GET'
-                    assert(method in ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'TRACE', 'CONNECT', 'OPTIONS'])
-                    return '    case .%s: return "%s"' %  (case._label, method)
+                    anon = RouterAnnotation(case)
+                    return '    case .%s: return "%s"' %  (case._label, anon.method)
 
                 lines = [
                     'public var method: String {',
@@ -903,16 +925,10 @@ class URLRequestHelper():
 
             def getPathString():
                 def getCasePathString(case):
-                    path = getPath(case)
-
-                    pathParamSet = set(getUsedParamNamesForPath(case))
-                    caseParams   = [i._name for i in case._assocVals if i._name != None]
-                    caseParamSet = set(caseParams)
-                    union = pathParamSet.intersection(caseParamSet)
-
-                    lets = [i if i in union else '_' for i in caseParams]
-                    letString = ('(let (' + ', '.join(lets) + '))') if len(union) > 0 else ''
-                    return '    case .%s%s: return "%s"' %  (case._label, letString, path)
+                    anon = RouterAnnotation(case)
+                    tup = anon.caseLetTuple
+                    tstr = '(let ' + tup + ')' if tup != '' else ''
+                    return '    case .%s%s: return "%s"' %  (case._label, tstr, anon.path)
 
                 lines = [
                     'public var path: String {',
@@ -932,10 +948,9 @@ class URLRequestHelper():
                     return info._name + '.toJSON()'
 
                 def getCaseParamsString(case):
-                    pathParamSet = set(getUsedParamNamesForPath(case))
-                    caseParams   = [i._name for i in case._assocVals if i._name != None]
-                    caseParamSet = set(caseParams)
-                    diff = caseParamSet.difference(pathParamSet)
+                    anon = RouterAnnotation(case)
+                    pathParams, caseParams = anon.paramSets()
+                    diff = set(caseParams).difference(set(pathParams))
 
                     lets = [i if i in diff else '_' for i in caseParams]
                     letString = ('(let (' + ', '.join(lets) + '))') if len(diff) > 0 else ''
