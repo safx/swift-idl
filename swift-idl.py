@@ -8,6 +8,7 @@ import json
 import os
 import re
 import subprocess
+from mako.template import Template
 
 PROGRAM_NAME='swift-idl'
 SOURCEKITTEN='sourceKitten'
@@ -109,6 +110,9 @@ def tokenrange(tokens, offset, length):
             break
     return range(start, end)
 
+
+def indent(text, width=4):
+    return '\n'.join([' ' * width + t for t in text.split('\n') if len(t.strip()) > 0])
 
 def parseAnnotation(comment_part):
     def parseOne(s):
@@ -556,14 +560,17 @@ class ClassInit():
         return None
 
     def processClass(self, swiftClass):
-        def param(p):
-            return p.name + ': ' + p.typename + (' = ' + p.defaultValue if p.defaultValue != None else '')
-        def init(p):
-            return ' ' * 8 + 'self.%s = %s' % (p.name, p.name)
-
-        paramString = ', '.join(map(param, swiftClass.variables))
-        initString = '\n'.join(map(init, swiftClass.variables))
-        return '    public init(%s) {\n%s\n    }' % (paramString, initString)
+        template = Template('''
+<%
+    p = ', '.join([v.name + ': ' + v.typename + (' = ' + v.defaultValue if v.defaultValue else '') for v in clazz.variables])
+%>
+public init(${p}) {
+    % for v in clazz.variables:
+    self.${v.name} = ${v.name}
+    % endfor
+}
+''')
+        return indent(template.render(clazz=swiftClass))
 
 
 class JSONDecodable():
@@ -576,64 +583,54 @@ class JSONDecodable():
         return 'JSONDecodable'
 
     def processClass(self, swiftClass):
-        def paramString(var):
-            an = JSONAnnotation(var)
-            if an.jsonOmitValue:
-                return []
-
-            ret = [
-                'let {name}: {typename}',
-                'if let v: AnyObject = data["{jsonlabel}"] {{',
-                '    if v is NSNull {{',
-                '        ' + ('{name} = {default}' if var.defaultValue else 'throw JSONDecodeError.NonNullablle(key: "{jsonlabel}")'),
-                '    }} else {{',
-                '        do {{',
-            ]
-
-            if var.isArray:
-                ret += [
-                    '            {name} = try {baseTypename}.%s(v)' % ('parseJSONArrayForNullable' if var.isArrayOfOptional else 'parseJSONArray',),
-                    '        }} catch JSONDecodeError.NonNullablle {{',
-                    '            throw JSONDecodeError.NonNullablle(key: "{jsonlabel}")',
-                ]
-            else:
-                ret += [
-                    '            {name} = try {baseTypename}.parseJSON(v)',
-                ]
-
-            ret += [
-                '        }} catch JSONDecodeError.ValueTranslationFailed {{',
-                '            throw JSONDecodeError.TypeMismatch(key: "{jsonlabel}", type: "{baseTypename}")',
-                '        }}',
-                '    }}',
-                '}} else {{',
-                '    ' + ('{name} = {default}' if var.defaultValue else 'throw JSONDecodeError.MissingKey(key: "{jsonlabel}")'),
-                '}}',
-                ''
-            ]
-
-            dic = {
-                'jsonlabel'    : an.jsonLabel,
-                'name'         : var.name,
-                'typename'     : var.typename,
-                'baseTypename' : var.baseTypename,
-                'default'      : var.defaultValue
+        template = Template('''
+<% anon = annotations['json'] %>
+public ${clazz.static} func parseJSON(data: AnyObject) throws -> ${clazz.name} {
+    if !(data is NSDictionary) {
+        throw JSONDecodeError.TypeMismatch(key: "${clazz.name}", type: "NSDictionary")
+    }
+    % for v in clazz.variables:
+    <%
+        an = anon(v)
+        parse = 'parseJSONArrayForNullable' if v.isArrayOfOptional else 'parseJSONArray'
+    %>
+    % if not an.jsonOmitValue:
+    let ${v.name}: ${v.typename}
+    if let v: AnyObject = data["${an.jsonLabel}"] {
+        if v is NSNull {
+        % if v.defaultValue:
+            ${v.name} = ${v.defaultValue}
+        % else:
+            throw JSONDecodeError.NonNullablle(key: "${an.jsonLabel}")
+        % endif
+        } else {
+            do {
+            % if v.isArray:
+                ${v.name} = try ${v.baseTypename}.${parse}(v)
+            } catch JSONDecodeError.NonNullablle {
+                throw JSONDecodeError.NonNullablle(key: "${an.jsonLabel}")
+            % else:
+                ${v.name} = try ${v.baseTypename}.parseJSON(v)
+            % endif
+            } catch JSONDecodeError.ValueTranslationFailed {
+                throw JSONDecodeError.TypeMismatch(key: "${an.jsonLabel}", type: "${v.baseTypename}")
             }
-            return map(lambda e: (' ' * 4) + e.format(**dic), ret)
+        }
+    } else {
+    % if v.defaultValue:
+        ${v.name} = ${v.defaultValue}
+    % else:
+        throw JSONDecodeError.MissingKey(key: "${an.jsonLabel}")
+    % endif
+    }
+    % endif
+    % endfor
 
-        # FIXME: always public
-        inits = ', '.join(map(lambda p: '%s: %s' % (p.name, p.name), filter(lambda x: not JSONAnnotation(x).jsonOmitValue, swiftClass.variables)))
-        # check whetherr other key-value exists if needed
-        lines = [
-            'public %s func parseJSON(data: AnyObject) throws -> %s {' % (swiftClass.static, swiftClass.name),
-            '    if !(data is NSDictionary) {',
-            '        throw JSONDecodeError.TypeMismatch(key: "%s", type: "NSDictionary")' % (swiftClass.name,),
-            '    }',
-            '',
-        ]
-        lines += sum(map(paramString, swiftClass.variables), [])
-        lines += [ '    return %s(%s)'  % (swiftClass.name, inits), '}' ]
-        return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
+    <% jsonInits = ', '.join([v.name + ': ' + v.name for v in clazz.variables if not anon(v).jsonOmitValue]) %>
+    return ${clazz.name}(${jsonInits})
+}
+''')
+        return indent(template.render(clazz=swiftClass, annotations={'json': JSONAnnotation}))
 
     def processEnum(self, swiftEnum, rawType):
         if rawType:
@@ -697,27 +694,27 @@ class JSONEncodable():
         return None
 
     def processClass(self, swiftClass):
-        def paramString(var):
-            an = JSONAnnotation(var)
-            if an.jsonOmitValue:
-                return []
-            elif var.isArray:
-                return ['"%s": %s.map { $0.toJSON() },' % (an.jsonLabel, '(' + var.name + ' ?? [])' if var.isOptional else var.name)]
-            elif var.isOptional:
-                return ['"%s": %s.map { $0.toJSON() } ?? NSNull(),' % (an.jsonLabel, var.name)]
-            return ['"%s": %s.toJSON(),' % (an.jsonLabel, var.name)]
-
-        # FIXME: always public
-        lines = [
-            'public func toJSON() -> [String: AnyObject] {',
-            '    return [',
-        ]
-        lines += sum(map(lambda e: map(lambda x:'        ' + x, paramString(e)), swiftClass.variables), [])
-        lines += [
-            '    ]',
-            '}'
-        ]
-        return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
+        template = Template('''
+<%  anon = annotations['json'] %>
+public func toJSON() -> [String: AnyObject] {
+    return [
+    % for v in clazz.variables:
+    <% an = anon(v) %>
+    % if an.jsonOmitValue:
+        <%doc>nohting</%doc>
+    % elif v.isArray:
+        <% z = '(' + v.name + ' ?? [])' if v.isOptional else v.name %>
+        "${an.jsonLabel}": ${z}.map { $0.toJSON() }
+    % elif v.isOptional:
+        "${an.jsonLabel}": ${v.name}.map { $0.toJSON() } ?? NSNull()
+    %else:
+        "${an.jsonLabel}": ${v.name}.toJSON()
+    % endif
+    % endfor
+    ]
+}
+''')
+        return indent(template.render(clazz=swiftClass, annotations={'json': JSONAnnotation}))
 
     def processEnum(self, swiftEnum, rawType):
         assert(rawType != None)
@@ -752,62 +749,43 @@ class NSCoding():
         assert('NSCoding is not allowed for enum')
 
     def processClass(self, swiftClass):
-        def initWithCoder():
-            # FIXME: always public
-            assigns = []
-            lines = [
-                'required public init?(coder: NSCoder) {',
-                '    var failed = false',
-            ]
+        template = Template('''
+required public init?(coder: NSCoder) {
+    var failed = false
 
-            for v in swiftClass.variables:
-                lines += ['']
-                if v.typename == 'Int':
-                    lines += ['    %s = coder.decodeIntegerForKey("%s")' % (v.name, v.name)]
-                elif v.typename == 'Float':
-                    lines += ['    %s = coder.decodeFloatForKey("%s")' % (v.name, v.name)]
-                else:
-                    lines += [
-                        '    if let %s = coder.decodeObjectForKey("%s") as? %s {' % (v.name, v.name, v.typename),
-                        '        self.%s = %s' % (v.name, v.name),
-                        '    } else {',
-                        '        self.%s = %s()' % (v.name, v.typename),
-                        '        failed = true',
-                        '    }',
-                    ]
+% for v in clazz.variables:
+% if v.typename == 'Int':
+    ${v.name} = coder.decodeIntegerForKey(${v.name})
+% elif v.typename == 'Float':
+    ${v.name} = coder.decodeFloatForKey(${v.name})
+% else:
+    if let ${v.name} = coder.decodeObjectForKey(${v.name}) as? ${v.typename} {
+        self.${v.name} = ${v.name}
+    } else {
+        self.${v.name} = ${v.typename}()  // FIXME: set default value
+        failed = true
+    }
+% endif
+% endfor
 
-            lines += assigns
-            lines += [
-                '',
-                '    if failed {',
-                '        return // nil',
-                '    }',
-                '}'
-            ]
-            return lines
-
-        def encodeWithCoder():
-            # FIXME: always public
-            params = ', '.join(map(lambda x: '%s=\(%s)' % (x.name, x.name), swiftClass.variables))
-            lines = [
-                'public func encodeWithCoder(coder: NSCoder) {',
-            ]
-
-            for v in swiftClass.variables:
-                if v.typename == 'Int':
-                    lines += ['    coder.encodeInteger(%s, forKey: "%s")' % (v.name, v.name)]
-                elif v.typename == 'Float':
-                    lines += ['    coder.encodeFloat(%s, forKey: "%s")' % (v.name, v.name)]
-                else:
-                    lines += ['    coder.encodeObject(%s, forKey: "%s")' % (v.name, v.name)]
-
-            lines += [
-                '}'
-            ]
-            return lines
-
-        lines = initWithCoder() + [''] + encodeWithCoder()
-        return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
+    if failed {
+        return // nil
+    }
+}
+//
+public func encodeWithCoder(coder: NSCoder) {
+% for v in clazz.variables:
+% if v.typename == 'Int':
+    coder.encodeInteger(${v.name}, forKey: "${v.name}")
+% elif v.typename == 'Float':
+    coder.encodeFloat(${v.name}, forKey: "${v.name}")
+% else:
+    coder.encodeObject(${v.name}, forKey: "${v.name}")
+% endif
+% endfor
+}
+''')
+        return indent(template.render(clazz=swiftClass))
 
 
 class Printable():
@@ -821,14 +799,15 @@ class Printable():
 
     def processClass(self, swiftClass):
         # FIXME: always public
-        params = ', '.join(map(lambda x: '%s=\(%s)' % (x.name, x.name), swiftClass.variables))
-
-        lines = [
-            'public var description: String {',
-            '    return "%s(%s)"'  % (swiftClass.name, params),
-            '}'
-        ]
-        return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
+        template = Template('''
+<%
+    p = ", ".join(["%s=\(%s)" % (v.name, v.name) for v in clazz.variables])
+%>
+public var description: String {
+    return "${clazz.name}(${p})
+}
+''')
+        return indent(template.render(clazz=swiftClass))
 
     def processEnum(self, swiftEnum, rawType):
         if rawType != None:
