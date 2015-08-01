@@ -171,7 +171,7 @@ class RouterAnnotation:
 
     def paramSets(self):
         pathParams = re.findall(r'\(([^)]+)\)', self.path)
-        caseParams = [i._name for i in self._case._assocVals if i._name != None]
+        caseParams = [i.name for i in self._case._assocVals if i.name != None] # FIXME: private access
         return (pathParams, caseParams)
 
     @property
@@ -193,7 +193,7 @@ class RouterAnnotation:
 def getIdlProtocolByName(protocols, name):
     for p in protocols:
         if p.name == name:
-            return p._clazz # FIXME: private
+            return p.clazz
     return None
 
 def getIdlProtocolsByNames(protocols, names):
@@ -207,7 +207,7 @@ def getIdlProtocolsByNames(protocols, names):
 def getDefaultIdlProtocol(protocols, name = 'Default'):
     for p in protocols:
         if p.name == name:
-            return getIdlProtocolsByNames(protocols, p._inheritedTypes) # FIXME: private
+            return getIdlProtocolsByNames(protocols, p.inheritedTypes)
     return []
 
 
@@ -372,7 +372,7 @@ class SwiftEnum():
         self._bodyOffset = node['key.bodyoffset']
         self._bodyLength = node['key.bodylength']
 
-        self._name              = node['key.name']
+        self._name = node['key.name']
         self._inheritedTypes = map(lambda e: e['key.name'], node.get('key.inheritedtypes', []))
 
         self._cases = getCases(tokens, self._bodyOffset, self._bodyLength)
@@ -417,6 +417,10 @@ class SwiftEnum():
     @property
     def name(self):
         return self._name
+
+    @property
+    def inheritedTypes(self):
+        return self._inheritedTypes
 
     @property
     def isRawType(self):
@@ -482,8 +486,7 @@ class SwiftCase():
     @property
     def letString(self):
         if len(self._assocVals) == 0: return ''
-        p = '(let ' + ', '.join(map(lambda x: x.varname, self._assocVals)) + ')'
-        return p
+        return '(let (' + ', '.join([i.varname for i in self._assocVals]) + '))'
 
     def __repr__(self):
         if self._value:
@@ -494,6 +497,7 @@ class SwiftCase():
                 p = '(' + ', '.join(map(str, self._assocVals)) + ')'
             return str(self._label) + p
 
+
 class SwiftCaseAssocValue():
     def __init__(self, name, typename, positon, isArray = False, isOptional = False):
         self._name = name
@@ -501,6 +505,10 @@ class SwiftCaseAssocValue():
         self._positon = positon
         self._isArray = isArray
         self._isOptional = isOptional
+
+    @property
+    def name(self):
+        return self._name
 
     @property
     def typename(self):
@@ -523,22 +531,27 @@ class SwiftCaseAssocValue():
         else:
             return self.typename
 
+
 class SwiftProtocol():
     def __init__(self, tokens, node):
-        self._name              = node['key.name']
+        self._name = node['key.name']
         self._inheritedTypes = map(lambda e: e['key.name'], node.get('key.inheritedtypes', []))
         self._clazz = None
+
+    @property
+    def clazz(self):
+        return self._clazz
 
     @property
     def name(self):
         return self._name
 
+    @property
+    def inheritedTypes(self):
+        return self._inheritedTypes
+
     def setClass(self, clazz):
         self._clazz = clazz
-
-    def __repr__(self):
-        return self._name + '(' + str(self._clazz) + ') :- ' + ', '.join(self._inheritedTypes)
-
 
 
 class SwiftTypename():
@@ -666,14 +679,11 @@ public ${clazz.static} func parseJSON(data: AnyObject) throws -> ${clazz.name} {
         template = Template('''
 public static func parseJSON(data: AnyObject) throws -> ${enum.name} {
 % if rawType:
-    if let v = data as? ${enum._inheritedTypes[0]}, val = ${enum.name}(rawValue: v) {
+    if let v = data as? ${enum.inheritedTypes[0]}, val = ${enum.name}(rawValue: v) {
         return val
     }
 % else:
 % for case in enum._cases:
-    <%
-        init = ', '.join([(v._name + ': ' + v._name) if v._name else v.name for v in case._assocVals])
-    %>
     if let obj: AnyObject = data["${case._label}"] {
         % for v in case._assocVals:
         let ${v.name}: ${v.typename}
@@ -687,6 +697,9 @@ public static func parseJSON(data: AnyObject) throws -> ${enum.name} {
             throw JSONDecodeError.MissingKey(key: "${v.keyname}")
         }
         % endfor
+        <%
+            init = ', '.join([(v.name + ': ' + v.name) if v.name else v.name for v in case._assocVals])
+        %>
         return .${case._label}(${init})
     }
 % endfor
@@ -730,9 +743,8 @@ public func toJSON() -> [String: AnyObject] {
         return indent(template.render(clazz=swiftClass, annotations={'json': JSONAnnotation}))
 
     def processEnum(self, swiftEnum, rawType):
-        # FIXME: private access: ${enum._inheritedTypes[0]}
         template = Template('''
-public func toJSON() -> ${enum._inheritedTypes[0]} {
+public func toJSON() -> ${enum.inheritedTypes[0]} {
     return rawValue
 }
 ''')
