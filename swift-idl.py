@@ -8,6 +8,7 @@ import json
 import os
 import re
 import subprocess
+from mako.template import Template
 
 PROGRAM_NAME='swift-idl'
 SOURCEKITTEN='sourceKitten'
@@ -110,6 +111,11 @@ def tokenrange(tokens, offset, length):
     return range(start, end)
 
 
+def indent(text, width=4):
+    lines = [' ' * width + t for t in text.split('\n') if len(t.strip()) > 0]
+    if width == 0: lines = [t if t.strip() != '//' else '' for t in lines]
+    return '\n'.join(lines)
+
 def parseAnnotation(comment_part):
     def parseOne(s):
         m = re.match(r'^(\w+):"([^"]+)"$', s)
@@ -167,21 +173,29 @@ class RouterAnnotation:
 
     def paramSets(self):
         pathParams = re.findall(r'\(([^)]+)\)', self.path)
-        caseParams = [i._name for i in self._case._assocVals if i._name != None]
+        caseParams = [i.name for i in self._case._assocVals if i.name != None] # FIXME: private access
         return (pathParams, caseParams)
 
     @property
-    def caseLetTuple(self):
+    def casePathString(self):
         pathParams, caseParams = self.paramSets()
         union = set(pathParams).intersection(set(caseParams))
+        if len(union) == 0: return ''
         lets = [i if i in union else '_' for i in caseParams]
-        return ('(' + ', '.join(lets) + ')') if len(union) > 0 else ''
+        return '(let (' + ', '.join(lets) + '))'
+
+    @property
+    def caseParams(self):
+        pathParams, caseParams = self.paramSets()
+        diff = set(caseParams).difference(set(pathParams))
+        lets = [i if i in diff else None for i in caseParams]
+
 
 
 def getIdlProtocolByName(protocols, name):
     for p in protocols:
         if p.name == name:
-            return p._clazz # FIXME: private
+            return p.clazz
     return None
 
 def getIdlProtocolsByNames(protocols, names):
@@ -195,7 +209,7 @@ def getIdlProtocolsByNames(protocols, names):
 def getDefaultIdlProtocol(protocols, name = 'Default'):
     for p in protocols:
         if p.name == name:
-            return getIdlProtocolsByNames(protocols, p._inheritedTypes) # FIXME: private
+            return getIdlProtocolsByNames(protocols, p.inheritedTypes)
     return []
 
 
@@ -219,29 +233,36 @@ class SwiftClass():
         if subs:
             self._innerClassesOrEnums = visitSubstructure(getClassOrEnum, tokens, subs, [])
 
-    def getDeclarationString(self, protocols):
+    def getDeclarationString(self, protocols, level=0):
+        template = Template('''
+public ${cs} ${clazz.name}${inh} {
+    % for v in clazz.variables:
+    ${v.parsedDeclarationWithoutDefaultValue}
+    % endfor
+
+% for r in rs:
+//
+${r}
+% endfor
+
+% for s in sub:
+//
+//
+${s}
+% endfor
+}
+''')
         ps = getIdlProtocolsByNames(protocols, self._inheritedTypes)
         if len(ps) == 0:
             ps = getDefaultIdlProtocol(protocols, 'ClassDefault')
 
-        typeInheritances = [i.protocolClass for i in ps if i.protocolClass != None]
-
-        # FIXME: always public
-        ret = 'public ' + ('struct' if self.isStruct else 'class') + ' ' + self._name
-        if len(typeInheritances) > 0:
-            ret += ': ' + ', '.join(typeInheritances)
-        ret += ' {\n'
-        ret += '\n'.join(map(lambda x: '    ' + x.parsedDeclarationWithoutDefaultValue, self._variables))
-        ret += '\n'
-        if len(ps) > 0:
-            ret += '\n'
-            ret += '\n\n'.join(map(lambda e: e.processClass(self), ps))
-            ret += '\n'
-        if len(self._innerClassesOrEnums) > 0:
-            sub = map(lambda e: e.getDeclarationString(protocols), self._innerClassesOrEnums)
-            ret = reduce(lambda a, e: a + e, sub, ret + '\n')
-        ret += '}\n'
-        return ret
+        ts = [i.protocolClass for i in ps if i.protocolClass != None]
+        output = template.render(clazz=self,
+                                 rs=[e.processClass(self) for e in ps],
+                                 cs='struct' if self.isStruct else 'class',
+                                 inh=': ' + ', '.join(ts) if len(ts) > 0 else '',
+                                 sub=map(lambda e: e.getDeclarationString(protocols, level + 1), self._innerClassesOrEnums))
+        return indent(output, level * 4)
 
     @property
     def static(self):
@@ -360,7 +381,7 @@ class SwiftEnum():
         self._bodyOffset = node['key.bodyoffset']
         self._bodyLength = node['key.bodylength']
 
-        self._name              = node['key.name']
+        self._name = node['key.name']
         self._inheritedTypes = map(lambda e: e['key.name'], node.get('key.inheritedtypes', []))
 
         self._cases = getCases(tokens, self._bodyOffset, self._bodyLength)
@@ -370,7 +391,7 @@ class SwiftEnum():
         if subs:
             self._innerClassesOrEnums = visitSubstructure(getClassOrEnum, tokens, subs, [])
 
-    def getDeclarationString(self, protocols):
+    def getDeclarationString(self, protocols, level = 0):
         ps = getIdlProtocolsByNames(protocols, self._inheritedTypes)
         if len(ps) == 0:
             ps = getDefaultIdlProtocol(protocols, 'EnumDefault')
@@ -407,6 +428,10 @@ class SwiftEnum():
         return self._name
 
     @property
+    def inheritedTypes(self):
+        return self._inheritedTypes
+
+    @property
     def isRawType(self):
         if len(self._inheritedTypes) > 0:
             n = self._inheritedTypes[0]
@@ -426,6 +451,7 @@ class SwiftCase():
         self._assocVals = []
         self._annotations = {}
 
+        paramPositon = 0
         t = tokens[pos]
         lineNumber = t['lineNumber']
         while t['offset'] < offset + length:
@@ -456,31 +482,42 @@ class SwiftCase():
                     self._value = tk
                 elif isType:
                     tp = self._assocVals[-1]
-                    self._assocVals[-1] = SwiftCaseAssocValue(tp._typename, tk, isArray, isOptional)
+                    self._assocVals[-1] = SwiftCaseAssocValue(tp._typename, tk, tp._positon, isArray, isOptional)
                 else:
-                    tp = SwiftCaseAssocValue(None, tk) # overridden when typename is taken
+                    tp = SwiftCaseAssocValue(None, tk, paramPositon) # overridden when typename is taken
                     self._assocVals.append(tp)
+                    paramPositon += 1
 
             pos += 1
             if pos >= len(tokens): break
             t = tokens[pos]
 
+    @property
+    def letString(self):
+        if len(self._assocVals) == 0: return ''
+        return '(let (' + ', '.join([i.varname for i in self._assocVals]) + '))'
+
     def __repr__(self):
         if self._value:
             return str(self._label) + ' = ' + str(self._value)
         else:
-            if len(self._assocVals) == 0:
-                return str(self._label)
-            else:
-                return str(self._label) + '(' + ', '.join(map(lambda e: e._name + ': ' + e.typename, self._assocVals)) + ')'
+            p = ''
+            if len(self._assocVals) > 0:
+                p = '(' + ', '.join(map(str, self._assocVals)) + ')'
+            return str(self._label) + p
 
 
 class SwiftCaseAssocValue():
-    def __init__(self, name, typename, isArray = False, isOptional = False):
+    def __init__(self, name, typename, positon, isArray = False, isOptional = False):
         self._name = name
         self._typename = typename
+        self._positon = positon
         self._isArray = isArray
         self._isOptional = isOptional
+
+    @property
+    def name(self):
+        return self._name
 
     @property
     def typename(self):
@@ -489,22 +526,41 @@ class SwiftCaseAssocValue():
         if self._isOptional: tk = tk + '?'
         return tk
 
+    @property
+    def varname(self):
+        return self._name if self._name else 'v' + str(self._positon)
+
+    @property
+    def keyname(self):
+        return self._name if self._name else str(self._positon)
+
+    def __repr__(self):
+        if self._name:
+            return self._name + ': ' + self.typename
+        else:
+            return self.typename
+
+
 class SwiftProtocol():
     def __init__(self, tokens, node):
-        self._name              = node['key.name']
+        self._name = node['key.name']
         self._inheritedTypes = map(lambda e: e['key.name'], node.get('key.inheritedtypes', []))
         self._clazz = None
+
+    @property
+    def clazz(self):
+        return self._clazz
 
     @property
     def name(self):
         return self._name
 
+    @property
+    def inheritedTypes(self):
+        return self._inheritedTypes
+
     def setClass(self, clazz):
         self._clazz = clazz
-
-    def __repr__(self):
-        return self._name + '(' + str(self._clazz) + ') :- ' + ', '.join(self._inheritedTypes)
-
 
 
 class SwiftTypename():
@@ -556,14 +612,17 @@ class ClassInit():
         return None
 
     def processClass(self, swiftClass):
-        def param(p):
-            return p.name + ': ' + p.typename + (' = ' + p.defaultValue if p.defaultValue != None else '')
-        def init(p):
-            return ' ' * 8 + 'self.%s = %s' % (p.name, p.name)
-
-        paramString = ', '.join(map(param, swiftClass.variables))
-        initString = '\n'.join(map(init, swiftClass.variables))
-        return '    public init(%s) {\n%s\n    }' % (paramString, initString)
+        template = Template('''
+<%
+    p = ', '.join([v.name + ': ' + v.typename + (' = ' + v.defaultValue if v.defaultValue else '') for v in clazz.variables])
+%>
+public init(${p}) {
+    % for v in clazz.variables:
+    self.${v.name} = ${v.name}
+    % endfor
+}
+''')
+        return indent(template.render(clazz=swiftClass))
 
 
 class JSONDecodable():
@@ -576,115 +635,90 @@ class JSONDecodable():
         return 'JSONDecodable'
 
     def processClass(self, swiftClass):
-        def paramString(var):
-            an = JSONAnnotation(var)
-            if an.jsonOmitValue:
-                return []
-
-            ret = [
-                'let {name}: {typename}',
-                'if let v: AnyObject = data["{jsonlabel}"] {{',
-                '    if v is NSNull {{',
-                '        ' + ('{name} = {default}' if var.defaultValue else 'throw JSONDecodeError.NonNullablle(key: "{jsonlabel}")'),
-                '    }} else {{',
-                '        do {{',
-            ]
-
-            if var.isArray:
-                ret += [
-                    '            {name} = try {baseTypename}.%s(v)' % ('parseJSONArrayForNullable' if var.isArrayOfOptional else 'parseJSONArray',),
-                    '        }} catch JSONDecodeError.NonNullablle {{',
-                    '            throw JSONDecodeError.NonNullablle(key: "{jsonlabel}")',
-                ]
-            else:
-                ret += [
-                    '            {name} = try {baseTypename}.parseJSON(v)',
-                ]
-
-            ret += [
-                '        }} catch JSONDecodeError.ValueTranslationFailed {{',
-                '            throw JSONDecodeError.TypeMismatch(key: "{jsonlabel}", type: "{baseTypename}")',
-                '        }}',
-                '    }}',
-                '}} else {{',
-                '    ' + ('{name} = {default}' if var.defaultValue else 'throw JSONDecodeError.MissingKey(key: "{jsonlabel}")'),
-                '}}',
-                ''
-            ]
-
-            dic = {
-                'jsonlabel'    : an.jsonLabel,
-                'name'         : var.name,
-                'typename'     : var.typename,
-                'baseTypename' : var.baseTypename,
-                'default'      : var.defaultValue
+        template = Template('''
+<% anon = annotations['json'] %>
+public ${clazz.static} func parseJSON(data: AnyObject) throws -> ${clazz.name} {
+    if !(data is NSDictionary) {
+        throw JSONDecodeError.TypeMismatch(key: "${clazz.name}", type: "NSDictionary")
+    }
+    % for v in clazz.variables:
+    <%
+        an = anon(v)
+        parse = 'parseJSONArrayForNullable' if v.isArrayOfOptional else 'parseJSONArray'
+    %>
+    //
+    % if not an.jsonOmitValue:
+    let ${v.name}: ${v.typename}
+    if let v: AnyObject = data["${an.jsonLabel}"] {
+        if v is NSNull {
+        % if v.defaultValue:
+            ${v.name} = ${v.defaultValue}
+        % else:
+            throw JSONDecodeError.NonNullablle(key: "${an.jsonLabel}")
+        % endif
+        } else {
+            do {
+            % if v.isArray:
+                ${v.name} = try ${v.baseTypename}.${parse}(v)
+            } catch JSONDecodeError.NonNullablle {
+                throw JSONDecodeError.NonNullablle(key: "${an.jsonLabel}")
+            % else:
+                ${v.name} = try ${v.baseTypename}.parseJSON(v)
+            % endif
+            } catch JSONDecodeError.ValueTranslationFailed {
+                throw JSONDecodeError.TypeMismatch(key: "${an.jsonLabel}", type: "${v.baseTypename}")
             }
-            return map(lambda e: (' ' * 4) + e.format(**dic), ret)
-
-        # FIXME: always public
-        inits = ', '.join(map(lambda p: '%s: %s' % (p.name, p.name), filter(lambda x: not JSONAnnotation(x).jsonOmitValue, swiftClass.variables)))
-        # check whetherr other key-value exists if needed
-        lines = [
-            'public %s func parseJSON(data: AnyObject) throws -> %s {' % (swiftClass.static, swiftClass.name),
-            '    if !(data is NSDictionary) {',
-            '        throw JSONDecodeError.TypeMismatch(key: "%s", type: "NSDictionary")' % (swiftClass.name,),
-            '    }',
-            '',
-        ]
-        lines += sum(map(paramString, swiftClass.variables), [])
-        lines += [ '    return %s(%s)'  % (swiftClass.name, inits), '}' ]
-        return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
+        }
+    } else {
+    % if v.defaultValue:
+        ${v.name} = ${v.defaultValue}
+    % else:
+        throw JSONDecodeError.MissingKey(key: "${an.jsonLabel}")
+    % endif
+    }
+    % endif
+    % endfor
+    //
+    <% jsonInits = ', '.join([v.name + ': ' + v.name for v in clazz.variables if not anon(v).jsonOmitValue]) %>
+    return ${clazz.name}(${jsonInits})
+}
+''')
+        return indent(template.render(clazz=swiftClass, annotations={'json': JSONAnnotation}))
 
     def processEnum(self, swiftEnum, rawType):
-        if rawType:
-            lines = [
-                'public static func parseJSON(data: AnyObject) throws -> %s {' % (swiftEnum.name),
-                '    if let v = data as? %s, val = %s(rawValue: v) {' % (swiftEnum._inheritedTypes[0], swiftEnum.name), # FIXME: private access
-                '        return val',
-                '    }',
-                '    throw JSONDecodeError.ValueTranslationFailed(type: "%s")' % (swiftEnum.name),
-                '}'
-            ]
-            return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
-        else:
-            def getAssocString(key_and_type):
-                akey, atype = key_and_type
-                lines = [
-                    'let %s: %s' % (akey, atype),
-                    '    if let vo = obj["%s"], v = vo {' % (akey,),
-                    '        do {',
-                    '            %s = try %s.parseJSON(v)' % (akey, atype),
-                    '        } catch JSONDecodeError.ValueTranslationFailed {',
-                    '            throw JSONDecodeError.TypeMismatch(key: "%s", type: "%s")' % (akey, atype),
-                    '        }',
-                    '    } else {',
-                    '        throw JSONDecodeError.MissingKey(key: "%s")' % (akey,),
-                    '    }',
-                ]
-                return '\n'.join(map(lambda e: (' ' * 8) + e, lines))
-
-            def getCaseString(case):
-                assocVals = case._assocVals # FIXME
-                lines = [
-                    'if let obj: AnyObject = data["%s"] {' % (case._label,),
-                ]
-                lines += map(getAssocString, assocVals)
-                ais = map(lambda x: '%s: %s' % (x[0], x[0]) if x[0][0] else '\(v.%d)' % x[1], assocVals)
-                lines += [
-                    '        return .%s(%s)' % (case._label, ', '.join(ais)),
-                    '    }',
-                ]
-                return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
-
-            lines = [
-                'public static func parseJSON(data: AnyObject) throws -> %s {' % (swiftEnum.name),
-            ]
-            lines += map(getCaseString, swiftEnum._cases)
-            lines += [
-                '    throw JSONDecodeError.ValueTranslationFailed(type: "%s")' % (swiftEnum.name,),
-                '}'
-            ]
-            return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
+        template = Template('''
+public static func parseJSON(data: AnyObject) throws -> ${enum.name} {
+% if rawType:
+    if let v = data as? ${enum.inheritedTypes[0]}, val = ${enum.name}(rawValue: v) {
+        return val
+    }
+% else:
+% for case in enum._cases:
+    if let obj: AnyObject = data["${case._label}"] {
+        % for v in case._assocVals:
+        let ${v.name}: ${v.typename}
+        if let vo = obj["${v.keyname}"], v = vo {
+            do {
+                ${v.name} = try ${v.typename}.parseJSON(v)
+            } catch JSONDecodeError.ValueTranslationFailed {
+                throw JSONDecodeError.TypeMismatch(key: "${v.keyname}", type: "${v.typename}")
+            }
+        } else {
+            throw JSONDecodeError.MissingKey(key: "${v.keyname}")
+        }
+        % endfor
+        //
+        <%
+            init = ', '.join([(v.name + ': ' + v.name) if v.name else v.name for v in case._assocVals])
+        %>
+        return .${case._label}(${init})
+    }
+% endfor
+% endif
+    throw JSONDecodeError.ValueTranslationFailed(type: "${enum.name}")
+}
+''')
+        return indent(template.render(enum=swiftEnum, rawType=rawType, annotations={'json': JSONAnnotation}))
 
 
 class JSONEncodable():
@@ -697,37 +731,35 @@ class JSONEncodable():
         return None
 
     def processClass(self, swiftClass):
-        def paramString(var):
-            an = JSONAnnotation(var)
-            if an.jsonOmitValue:
-                return []
-            elif var.isArray:
-                return ['"%s": %s.map { $0.toJSON() },' % (an.jsonLabel, '(' + var.name + ' ?? [])' if var.isOptional else var.name)]
-            elif var.isOptional:
-                return ['"%s": %s.map { $0.toJSON() } ?? NSNull(),' % (an.jsonLabel, var.name)]
-            return ['"%s": %s.toJSON(),' % (an.jsonLabel, var.name)]
-
-        # FIXME: always public
-        lines = [
-            'public func toJSON() -> [String: AnyObject] {',
-            '    return [',
-        ]
-        lines += sum(map(lambda e: map(lambda x:'        ' + x, paramString(e)), swiftClass.variables), [])
-        lines += [
-            '    ]',
-            '}'
-        ]
-        return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
+        template = Template('''
+<%  anon = annotations['json'] %>
+public func toJSON() -> [String: AnyObject] {
+    return [
+    % for v in clazz.variables:
+    <% an = anon(v) %>
+    % if an.jsonOmitValue:
+        <%doc>nohting</%doc>
+    % elif v.isArray:
+        <% z = '(' + v.name + ' ?? [])' if v.isOptional else v.name %>
+        "${an.jsonLabel}": ${z}.map { $0.toJSON() }
+    % elif v.isOptional:
+        "${an.jsonLabel}": ${v.name}.map { $0.toJSON() } ?? NSNull()
+    %else:
+        "${an.jsonLabel}": ${v.name}.toJSON()
+    % endif
+    % endfor
+    ]
+}
+''')
+        return indent(template.render(clazz=swiftClass, annotations={'json': JSONAnnotation}))
 
     def processEnum(self, swiftEnum, rawType):
-        assert(rawType != None)
-        # FIXME: always public
-        lines = [
-            'public func toJSON() -> %s {' % (swiftEnum._inheritedTypes[0]), # FIXME: private access
-            '    return rawValue',
-            '}'
-        ]
-        return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
+        template = Template('''
+public func toJSON() -> ${enum.inheritedTypes[0]} {
+    return rawValue
+}
+''')
+        return indent(template.render(enum=swiftEnum, annotations={'json': JSONAnnotation}))
 
 class ErrorType():
     @property
@@ -752,62 +784,43 @@ class NSCoding():
         assert('NSCoding is not allowed for enum')
 
     def processClass(self, swiftClass):
-        def initWithCoder():
-            # FIXME: always public
-            assigns = []
-            lines = [
-                'required public init?(coder: NSCoder) {',
-                '    var failed = false',
-            ]
+        template = Template('''
+required public init?(coder: NSCoder) {
+    var failed = false
 
-            for v in swiftClass.variables:
-                lines += ['']
-                if v.typename == 'Int':
-                    lines += ['    %s = coder.decodeIntegerForKey("%s")' % (v.name, v.name)]
-                elif v.typename == 'Float':
-                    lines += ['    %s = coder.decodeFloatForKey("%s")' % (v.name, v.name)]
-                else:
-                    lines += [
-                        '    if let %s = coder.decodeObjectForKey("%s") as? %s {' % (v.name, v.name, v.typename),
-                        '        self.%s = %s' % (v.name, v.name),
-                        '    } else {',
-                        '        self.%s = %s()' % (v.name, v.typename),
-                        '        failed = true',
-                        '    }',
-                    ]
+% for v in clazz.variables:
+% if v.typename == 'Int':
+    ${v.name} = coder.decodeIntegerForKey(${v.name})
+% elif v.typename == 'Float':
+    ${v.name} = coder.decodeFloatForKey(${v.name})
+% else:
+    if let ${v.name} = coder.decodeObjectForKey(${v.name}) as? ${v.typename} {
+        self.${v.name} = ${v.name}
+    } else {
+        self.${v.name} = ${v.typename}()  // FIXME: set default value
+        failed = true
+    }
+% endif
+% endfor
 
-            lines += assigns
-            lines += [
-                '',
-                '    if failed {',
-                '        return // nil',
-                '    }',
-                '}'
-            ]
-            return lines
-
-        def encodeWithCoder():
-            # FIXME: always public
-            params = ', '.join(map(lambda x: '%s=\(%s)' % (x.name, x.name), swiftClass.variables))
-            lines = [
-                'public func encodeWithCoder(coder: NSCoder) {',
-            ]
-
-            for v in swiftClass.variables:
-                if v.typename == 'Int':
-                    lines += ['    coder.encodeInteger(%s, forKey: "%s")' % (v.name, v.name)]
-                elif v.typename == 'Float':
-                    lines += ['    coder.encodeFloat(%s, forKey: "%s")' % (v.name, v.name)]
-                else:
-                    lines += ['    coder.encodeObject(%s, forKey: "%s")' % (v.name, v.name)]
-
-            lines += [
-                '}'
-            ]
-            return lines
-
-        lines = initWithCoder() + [''] + encodeWithCoder()
-        return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
+    if failed {
+        return // nil
+    }
+}
+//
+public func encodeWithCoder(coder: NSCoder) {
+% for v in clazz.variables:
+% if v.typename == 'Int':
+    coder.encodeInteger(${v.name}, forKey: "${v.name}")
+% elif v.typename == 'Float':
+    coder.encodeFloat(${v.name}, forKey: "${v.name}")
+% else:
+    coder.encodeObject(${v.name}, forKey: "${v.name}")
+% endif
+% endfor
+}
+''')
+        return indent(template.render(clazz=swiftClass))
 
 
 class Printable():
@@ -821,41 +834,34 @@ class Printable():
 
     def processClass(self, swiftClass):
         # FIXME: always public
-        params = ', '.join(map(lambda x: '%s=\(%s)' % (x.name, x.name), swiftClass.variables))
-
-        lines = [
-            'public var description: String {',
-            '    return "%s(%s)"'  % (swiftClass.name, params),
-            '}'
-        ]
-        return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
+        template = Template('''
+<%
+    p = ", ".join(["%s=\(%s)" % (v.name, v.name) for v in clazz.variables])
+%>
+public var description: String {
+    return "${clazz.name}(${p})
+}
+''')
+        return indent(template.render(clazz=swiftClass))
 
     def processEnum(self, swiftEnum, rawType):
         if rawType != None:
             return '    public var description: String { return rawValue }'
-        else:
-            def getCaseString(case):
-                assocVals = case._assocVals # FIXME
-                if len(assocVals) > 1:
-                    ais = map(lambda x: '%s=\(v.%s)' % (x[1]._name, x[0]) if x[1]._name else '\(v.%d)' % x[0], enumerate(assocVals))
-                    vo = '(' + ', '.join(ais) + ')'
-                elif len(assocVals) == 1:
-                    vo = '(%s=\(v))' % (assocVals[0]._name,)
-                else:
-                    vo = ''
 
-                return '    case .%s%s: return "%s%s"' % (case._label, '(let v)' if len(assocVals) > 0 else '', case._label, vo) # FIXME
-
-            lines = [
-                'public var description: String {',
-                '    switch self {',
-            ]
-            lines += map(getCaseString, swiftEnum._cases)
-            lines += [
-                '    }',
-                '}'
-            ]
-            return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
+        template = Template('''
+public var description: String {
+    switch self {
+    % for case in enum._cases:
+    <%
+        av  = ['%s=\(%s)' % (v._name, v._name) if v._name else '\(%s)' % v.varname for v in case._assocVals]
+        out = '(' + ', '.join(av) + ')' if len(av) else ''
+    %>
+    case .${case._label}${case.letString}: return "${case._label}${out}"
+    % endfor
+    }
+}
+''')
+        return indent(template.render(enum=swiftEnum))
 
 
 class EnumStaticInit():
@@ -874,21 +880,20 @@ class EnumStaticInit():
         if rawType != None:
             return None # FIXME
         else:
-            def getCaseString(case):
-                assocVals = case._assocVals # FIXME
-                # FIXME: check optional
-                ais = map(lambda x: '%s: %s = %s()' % (x[1]._name, x[1].typename, x[1].typename) if x[1]._name else 'arg%d: %s = %s()' % (x[0], x[1].typename, x[1].typename), enumerate(assocVals))
-                cis = map(lambda x: '%s: %s' % (x[1]._name, x[1]._name) if x[1]._name else 'arg%d' % (x[0],), enumerate(assocVals))
-
-                ret = [
-                    'public static func make%s(%s) -> %s {' % (case._label, ", ".join(ais), swiftEnum.name),
-                    '    return .%s%s' % (case._label, '(' + ', '.join(cis) + ')' if len(cis) > 0 else ''),
-                    '}'
-                ]
-                return ret
-
-            lines = sum(map(getCaseString, swiftEnum._cases), [])
-            return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
+            template = Template('''
+% for case in enum._cases:
+<%
+    ais = map(lambda x: '%s: %s = %s()' % (x._name, x.typename, x.typename) if x._name else 'arg%d: %s = %s()' % (x._positon, x.typename, x.typename), case._assocVals)
+    cis = map(lambda x: '%s: %s' % (x._name, x._name) if x._name else 'arg%d' % x._positon, case._assocVals)
+    params = ", ".join(ais)
+    out    = '(' + ', '.join(cis) + ')' if len(cis) > 0 else ''
+%>
+public static func make${case._label}(${params}) -> ${enum.name} {
+    return .${case._label}${out}
+}
+% endfor
+''')
+            return indent(template.render(enum=swiftEnum))
 
 
 class URLRequestHelper():
@@ -907,93 +912,66 @@ class URLRequestHelper():
         if rawType != None:
             return None # FIXME
         else:
-            def getMethodString():
-                def getCaseMethodString(case):
-                    anon = RouterAnnotation(case)
-                    return '    case .%s: return "%s"' %  (case._label, anon.method)
+            template = Template('''
+<% anon = annotations['router'] %>
+public var method: String {
+    switch self {
+    % for case in enum._cases:
+    <% an = anon(case) %>
+    case .${case._label}: return "${an.method}"
+    % endfor
+    }
+}
+//
+public var path: String {
+    switch self {
+    % for case in enum._cases:
+    <% an = anon(case) %>
+    case .${case._label}${an.casePathString}: return "${an.path}"
+    % endfor
+    }
+}
+//
+public var params: [String: AnyObject] {
+    switch self {
+    % for case in enum._cases:
+    <%
+        def toJsonString(info):
+             if info._isArray: return info._name + '.map { $0.toJSON() }'
+             return info._name + '.toJSON()'
 
-                lines = [
-                    'public var method: String {',
-                    '    switch self {',
-                ]
-                lines += map(getCaseMethodString, swiftEnum._cases)
-                lines += [
-                    '    }',
-                    '}',
-                ]
-                return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
+        an = anon(case)
+        pathParams, caseParams = an.paramSets()
+        diff = set(caseParams).difference(set(pathParams))
 
-            def getPathString():
-                def getCasePathString(case):
-                    anon = RouterAnnotation(case)
-                    tup = anon.caseLetTuple
-                    tstr = '(let ' + tup + ')' if tup != '' else ''
-                    return '    case .%s%s: return "%s"' %  (case._label, tstr, anon.path)
+        lets = [i if i in diff else '_' for i in caseParams]
+        letString = ('(let (' + ', '.join(lets) + '))') if len(diff) > 0 else ''
 
-                lines = [
-                    'public var path: String {',
-                    '    switch self {',
-                ]
-                lines += map(getCasePathString, swiftEnum._cases)
-                lines += [
-                    '    }',
-                    '}',
-                ]
-                return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
+        dicx = [i for i in case._assocVals if i._name in diff]
 
-            def getParamsString():
-                # FIXME
-                def toJsonString(info):
-                    if info._isArray: return info._name + '.map { $0.toJSON() }'
-                    return info._name + '.toJSON()'
+        inits   = ['"%s": %s' % (i._name, toJsonString(i)) for i in dicx if not i._isOptional]
+        initStr = ', '.join(inits) if len(inits) else ':'
 
-                def getCaseParamsString(case):
-                    anon = RouterAnnotation(case)
-                    pathParams, caseParams = anon.paramSets()
-                    diff = set(caseParams).difference(set(pathParams))
-
-                    lets = [i if i in diff else '_' for i in caseParams]
-                    letString = ('(let (' + ', '.join(lets) + '))') if len(diff) > 0 else ''
-
-                    dicx = [i for i in case._assocVals if i._name in diff]
-
-                    dic = ', '.join(['"%s": %s' % (i._name, toJsonString(i)) for i in dicx if not i._isOptional])
-                    dic = '[:]' if len(dic) == 0 else '[' + dic + ']'
-
-                    dicOpts = '\n            '.join(['%s.map { p["%s"] = $0.toJSON() }' % (i._name, i._name) for i in dicx if i._isOptional])
-                    dicOpts = '' if len(dicOpts) == 0 else '        ' + dicOpts
-
-                    lines = [
-                        'case .%s%s:' % (case._label, letString),
-                    ]
-                    if len(dicOpts) == 0:
-                        lines += [
-                            '        return ' + dic,
-                        ]
-                    else:
-                        lines += [
-                            '        var p: [String: AnyObject] = ' + dic,
-                        ]
-                        lines += [
-                            dicOpts,
-                        ]
-                        lines += [
-                            '        return p'
-                        ]
-                    return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
-
-                lines = [
-                    'public var params: [String: AnyObject] {',
-                    '    switch self {',
-                ]
-                lines += map(getCaseParamsString, swiftEnum._cases)
-                lines += [
-                    '    }',
-                    '}',
-                ]
-                return '\n'.join(map(lambda e: (' ' * 4) + e, lines))
-
-            return getMethodString() + '\n' + getPathString() + '\n' + getParamsString()
+        params = ['%s.map { p["%s"] = $0.toJSON() }' % (i._name, i._name) for i in dicx if i._isOptional]
+    %>
+    % if len(diff) > 0:
+    case .${case._label}${letString}:
+        % if len(params) > 0:
+        var p: [String: AnyObject] = [${initStr}]
+        % for p in params:
+        ${p}
+        % endfor
+        return p
+        % else:
+        return [${initStr}]
+        % endif
+    % endif
+    % endfor
+    default: return [:]
+    }
+}
+''')
+            return indent(template.render(enum=swiftEnum, annotations={'router': RouterAnnotation}))
 
 
 def processProject(func, parsed_doc):
