@@ -112,7 +112,9 @@ def tokenrange(tokens, offset, length):
 
 
 def indent(text, width=4):
-    return '\n'.join([' ' * width + t for t in text.split('\n') if len(t.strip()) > 0])
+    lines = [' ' * width + t for t in text.split('\n') if len(t.strip()) > 0]
+    if width == 0: lines = [t if t.strip() != '//' else '' for t in lines]
+    return '\n'.join(lines)
 
 def parseAnnotation(comment_part):
     def parseOne(s):
@@ -231,29 +233,36 @@ class SwiftClass():
         if subs:
             self._innerClassesOrEnums = visitSubstructure(getClassOrEnum, tokens, subs, [])
 
-    def getDeclarationString(self, protocols):
+    def getDeclarationString(self, protocols, level=0):
+        template = Template('''
+public ${cs} ${clazz.name}${inh} {
+    % for v in clazz.variables:
+    ${v.parsedDeclarationWithoutDefaultValue}
+    % endfor
+
+% for r in rs:
+//
+${r}
+% endfor
+
+% for s in sub:
+//
+//
+${s}
+% endfor
+}
+''')
         ps = getIdlProtocolsByNames(protocols, self._inheritedTypes)
         if len(ps) == 0:
             ps = getDefaultIdlProtocol(protocols, 'ClassDefault')
 
-        typeInheritances = [i.protocolClass for i in ps if i.protocolClass != None]
-
-        # FIXME: always public
-        ret = 'public ' + ('struct' if self.isStruct else 'class') + ' ' + self._name
-        if len(typeInheritances) > 0:
-            ret += ': ' + ', '.join(typeInheritances)
-        ret += ' {\n'
-        ret += '\n'.join(map(lambda x: '    ' + x.parsedDeclarationWithoutDefaultValue, self._variables))
-        ret += '\n'
-        if len(ps) > 0:
-            ret += '\n'
-            ret += '\n\n'.join(map(lambda e: e.processClass(self), ps))
-            ret += '\n'
-        if len(self._innerClassesOrEnums) > 0:
-            sub = map(lambda e: e.getDeclarationString(protocols), self._innerClassesOrEnums)
-            ret = reduce(lambda a, e: a + e, sub, ret + '\n')
-        ret += '}\n'
-        return ret
+        ts = [i.protocolClass for i in ps if i.protocolClass != None]
+        output = template.render(clazz=self,
+                                 rs=[e.processClass(self) for e in ps],
+                                 cs='struct' if self.isStruct else 'class',
+                                 inh=': ' + ', '.join(ts) if len(ts) > 0 else '',
+                                 sub=map(lambda e: e.getDeclarationString(protocols, level + 1), self._innerClassesOrEnums))
+        return indent(output, level * 4)
 
     @property
     def static(self):
@@ -382,7 +391,7 @@ class SwiftEnum():
         if subs:
             self._innerClassesOrEnums = visitSubstructure(getClassOrEnum, tokens, subs, [])
 
-    def getDeclarationString(self, protocols):
+    def getDeclarationString(self, protocols, level = 0):
         ps = getIdlProtocolsByNames(protocols, self._inheritedTypes)
         if len(ps) == 0:
             ps = getDefaultIdlProtocol(protocols, 'EnumDefault')
@@ -637,6 +646,7 @@ public ${clazz.static} func parseJSON(data: AnyObject) throws -> ${clazz.name} {
         an = anon(v)
         parse = 'parseJSONArrayForNullable' if v.isArrayOfOptional else 'parseJSONArray'
     %>
+    //
     % if not an.jsonOmitValue:
     let ${v.name}: ${v.typename}
     if let v: AnyObject = data["${an.jsonLabel}"] {
@@ -668,7 +678,7 @@ public ${clazz.static} func parseJSON(data: AnyObject) throws -> ${clazz.name} {
     }
     % endif
     % endfor
-
+    //
     <% jsonInits = ', '.join([v.name + ': ' + v.name for v in clazz.variables if not anon(v).jsonOmitValue]) %>
     return ${clazz.name}(${jsonInits})
 }
@@ -697,6 +707,7 @@ public static func parseJSON(data: AnyObject) throws -> ${enum.name} {
             throw JSONDecodeError.MissingKey(key: "${v.keyname}")
         }
         % endfor
+        //
         <%
             init = ', '.join([(v.name + ': ' + v.name) if v.name else v.name for v in case._assocVals])
         %>
