@@ -235,7 +235,7 @@ class SwiftClass():
 
     def getDeclarationString(self, protocols, level=0):
         template = Template('''
-public ${cs} ${clazz.name}${inh} {
+public ${clazz.decltype} ${clazz.name}${inh} {
     % for v in clazz.variables:
     ${v.parsedDeclarationWithoutDefaultValue}
     % endfor
@@ -247,7 +247,6 @@ ${r}
 
 % for s in sub:
 //
-//
 ${s}
 % endfor
 }
@@ -256,17 +255,20 @@ ${s}
         if len(ps) == 0:
             ps = getDefaultIdlProtocol(protocols, 'ClassDefault')
 
-        ts = [i.protocolClass for i in ps if i.protocolClass != None]
+        typeInheritances = [i.protocolClass for i in ps if i.protocolClass != None]
         output = template.render(clazz=self,
                                  rs=[e.processClass(self) for e in ps],
-                                 cs='struct' if self.isStruct else 'class',
-                                 inh=': ' + ', '.join(ts) if len(ts) > 0 else '',
+                                 inh=': ' + ', '.join(typeInheritances) if len(typeInheritances) > 0 else '',
                                  sub=map(lambda e: e.getDeclarationString(protocols, level + 1), self._innerClassesOrEnums))
         return indent(output, level * 4)
 
     @property
     def static(self):
         return 'static' if self.isStruct else 'class'
+
+    @property
+    def decltype(self):
+        return 'struct' if self.isStruct else 'class'
 
     @property
     def name(self):
@@ -392,6 +394,23 @@ class SwiftEnum():
             self._innerClassesOrEnums = visitSubstructure(getClassOrEnum, tokens, subs, [])
 
     def getDeclarationString(self, protocols, level = 0):
+        template = Template('''
+public enum ${enum.name}${inh} {
+    % for c in enum._cases:
+    case ${c}
+    % endfor
+
+% for r in rs:
+//
+${r}
+% endfor
+
+% for s in sub:
+//
+${s}
+% endfor
+}
+''')
         ps = getIdlProtocolsByNames(protocols, self._inheritedTypes)
         if len(ps) == 0:
             ps = getDefaultIdlProtocol(protocols, 'EnumDefault')
@@ -399,29 +418,11 @@ class SwiftEnum():
         rawType = self.getRawType(protocols)
 
         typeInheritances = ([rawType] if rawType != None else []) + [i.protocolEnum for i in ps if i.protocolEnum != None]
-        processedProtocols = filter(lambda e: e != None, map(lambda e: e.processEnum(self, rawType), ps))
-
-        ret = 'public enum ' + self._name
-        if len(typeInheritances) > 0:
-            ret += ': ' + ', '.join(typeInheritances)
-        ret += ' {'
-
-        if len(self._cases) > 0:
-            ret += '\n'
-            for c in self._cases:
-                ret += '    case ' + str(c)
-                ret += '\n'
-
-        if len(processedProtocols) > 0:
-            ret += '\n'
-            ret += '\n\n'.join(processedProtocols)
-            ret += '\n'
-
-        if len(self._innerClassesOrEnums) > 0:
-            sub = map(lambda e: e.getDeclarationString(protocols), self._innerClassesOrEnums)
-            ret = reduce(lambda a, e: a + e, sub, ret + '\n')
-        ret += '}\n'
-        return ret
+        output = template.render(enum=self,
+                                 rs=filter(lambda e: e != None, map(lambda e: e.processEnum(self, rawType), ps)),
+                                 inh=': ' + ', '.join(typeInheritances) if len(typeInheritances) > 0 else '',
+                                 sub=map(lambda e: e.getDeclarationString(protocols, level + 1), self._innerClassesOrEnums))
+        return indent(output, level * 4)
 
     @property
     def name(self):
