@@ -157,6 +157,7 @@ class RouterAnnotation:
         self._case = case
         self.method = 'GET'
         self.path = case._label # FIXME: private access
+        self._responseType = None
 
         annons = anon_dic.get('router', [''])
 
@@ -171,10 +172,19 @@ class RouterAnnotation:
             if path != '':
                 self.path = path
 
+        if len(annons) > 2:
+            retType = annons[2]
+            if retType != '':
+                self._responseType = retType
+
     def paramSets(self):
         pathParams = re.findall(r'\(([^)]+)\)', self.path)
         caseParams = [i.name for i in self._case._assocVals if i.name != None] # FIXME: private access
         return (pathParams, caseParams)
+
+    @property
+    def responseType(self):
+        return self._responseType or self._case._label + 'Response'
 
     @property
     def casePathString(self):
@@ -915,6 +925,93 @@ class URLRequestHelper():
         else:
             template = Template('''
 <% anon = annotations['router'] %>
+public var method: String {
+    switch self {
+    % for case in enum._cases:
+    <% an = anon(case) %>
+    case .${case._label}: return "${an.method}"
+    % endfor
+    }
+}
+//
+public var path: String {
+    switch self {
+    % for case in enum._cases:
+    <% an = anon(case) %>
+    case .${case._label}${an.casePathString}: return "${an.path}"
+    % endfor
+    }
+}
+//
+public var params: [String: AnyObject] {
+    switch self {
+    % for case in enum._cases:
+    <%
+        def toJsonString(info):
+             if info._isArray: return info._name + '.map { $0.toJSON() }'
+             return info._name + '.toJSON()'
+
+        an = anon(case)
+        pathParams, caseParams = an.paramSets()
+        diff = set(caseParams).difference(set(pathParams))
+
+        lets = [i if i in diff else '_' for i in caseParams]
+        letString = ('(let (' + ', '.join(lets) + '))') if len(diff) > 0 else ''
+
+        dicx = [i for i in case._assocVals if i._name in diff]
+
+        inits   = ['"%s": %s' % (i._name, toJsonString(i)) for i in dicx if not i._isOptional]
+        initStr = ', '.join(inits) if len(inits) else ':'
+
+        params = ['%s.map { p["%s"] = $0.toJSON() }' % (i._name, i._name) for i in dicx if i._isOptional]
+    %>
+    % if len(diff) > 0:
+    case .${case._label}${letString}:
+        % if len(params) > 0:
+        var p: [String: AnyObject] = [${initStr}]
+        % for p in params:
+        ${p}
+        % endfor
+        return p
+        % else:
+        return [${initStr}]
+        % endif
+    % endif
+    % endfor
+    default: return [:]
+    }
+}
+''')
+            return indent(template.render(enum=swiftEnum, annotations={'router': RouterAnnotation}))
+
+
+class APIKitHelper():
+    @property
+    def protocolEnum(self):
+        return None
+
+    def processEnum(self, swiftEnum, rawType):
+        if rawType != None:
+            return None # FIXME
+        else:
+            template = Template('''
+<% anon = annotations['router'] %>
+public enum api {
+    % for case in enum._cases:
+    <%
+        an = anon(case)
+        inits = map(lambda x: '%s: %s = %s()' % (x._name, x.typename, x.typename) if x._name else 'arg%d: %s = %s()' % (x._positon, x.typename, x.typename), case._assocVals)
+        cs = map(lambda x: '%s: %s' % (x._name, x._name) if x._name else 'arg%d' % x._positon, case._assocVals)
+        assocs = '(' + ', '.join(cs) + ')' if len(cs) else ''
+    %>
+    public class ${case._label}: APIKitRequest<${an.responseType}> {
+        public init(${', '.join(inits)}) {
+            super.init(route: .${case._label}${assocs})
+        }
+    }
+    % endfor
+}
+//
 public var method: String {
     switch self {
     % for case in enum._cases:
