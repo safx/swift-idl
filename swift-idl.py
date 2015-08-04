@@ -265,7 +265,7 @@ ${s}
         if len(ps) == 0:
             ps = getDefaultIdlProtocol(protocols, 'ClassDefault')
 
-        typeInheritances = [i.protocolClass for i in ps if i.protocolClass != None]
+        typeInheritances = sum([e.protocolClass for e in ps], [])
         output = template.render(clazz=self,
                                  rs=[e.processClass(self) for e in ps],
                                  inh=': ' + ', '.join(typeInheritances) if len(typeInheritances) > 0 else '',
@@ -427,7 +427,7 @@ ${s}
 
         rawType = self.getRawType(protocols)
 
-        typeInheritances = ([rawType] if rawType != None else []) + [i.protocolEnum for i in ps if i.protocolEnum != None]
+        typeInheritances = sum([e.protocolEnum for e in ps], [rawType] if rawType != None else [])
         output = template.render(enum=self,
                                  rs=filter(lambda e: e != None, map(lambda e: e.processEnum(self, rawType), ps)),
                                  inh=': ' + ', '.join(typeInheritances) if len(typeInheritances) > 0 else '',
@@ -620,7 +620,7 @@ def parseTypename(typename):
 class ClassInit():
     @property
     def protocolClass(self):
-        return None
+        return []
 
     def processClass(self, swiftClass):
         template = Template('''
@@ -639,11 +639,11 @@ public init(${p}) {
 class JSONDecodable():
     @property
     def protocolClass(self):
-        return 'JSONDecodable'
+        return ['JSONDecodable']
 
     @property
     def protocolEnum(self):
-        return 'JSONDecodable'
+        return ['JSONDecodable']
 
     def processClass(self, swiftClass):
         template = Template('''
@@ -732,14 +732,64 @@ public static func parseJSON(data: AnyObject) throws -> ${enum.name} {
         return indent(template.render(enum=swiftEnum, rawType=rawType, annotations={'json': JSONAnnotation}))
 
 
+class EJDB():
+    @property
+    def protocolClass(self):
+        return []
+
+    def processClass(self, swiftClass):
+        template = Template('''
+<% anon = annotations['json'] %>
+public ${clazz.static} func parseBSON(iter: BSONIterater) throws -> ${clazz.name} {
+    % for v in clazz.variables:
+    <%
+        an = anon(v)
+        parse = 'parseBSONArrayForNullable' if v.isArrayOfOptional else 'parseBSONArray'
+    %>
+    //
+    % if not an.jsonOmitValue:
+    let ${v.name}: ${v.typename}
+    do {
+        let type = itor.find("${an.jsonLabel}")
+
+        if type == BSON_UNDEFINED {
+        % if v.defaultValue:
+            ${v.name} = ${v.defaultValue}
+        % else:
+            throw BSONDecodeError.MissingKey(key: "${an.jsonLabel}")
+        % endif
+        } else if type == BSON_NULL {
+        % if v.defaultValue:
+            ${v.name} = ${v.defaultValue}
+        % else:
+            throw JSONDecodeError.TypeMismatch(key: "${an.jsonLabel}", type: "${v.baseTypename}")
+        % endif
+        } else {
+        % if v.isArray:
+            ${v.name} = try ${v.baseTypename}.${parse}(itor)
+        % else:
+            ${v.name} = try ${v.baseTypename}.parseBSON(itor)
+        % endif
+        }
+    }
+    % endif
+    % endfor
+    //
+    <% jsonInits = ', '.join([v.name + ': ' + v.name for v in clazz.variables if not anon(v).jsonOmitValue]) %>
+    return ${clazz.name}(${jsonInits})
+}
+''')
+        return indent(template.render(clazz=swiftClass, annotations={'json': JSONAnnotation}))
+
+
 class JSONEncodable():
     @property
     def protocolClass(self):
-        return 'JSONEncodable'
+        return ['JSONEncodable']
 
     @property
     def protocolEnum(self):
-        return None
+        return []
 
     def processClass(self, swiftClass):
         template = Template('''
@@ -779,7 +829,7 @@ class ErrorType():
 
     @property
     def protocolEnum(self):
-        return 'ErrorType'
+        return ['ErrorType']
 
     def processEnum(self, swiftEnum, rawType):
         return None
@@ -788,7 +838,7 @@ class ErrorType():
 class NSCoding():
     @property
     def protocolClass(self):
-        return 'NSCoding'
+        return ['NSCoding']
 
     @property
     def protocolEnum(self):
@@ -837,11 +887,11 @@ public func encodeWithCoder(coder: NSCoder) {
 class Printable():
     @property
     def protocolClass(self):
-        return 'CustomStringConvertible'
+        return ['CustomStringConvertible']
 
     @property
     def protocolEnum(self):
-        return 'CustomStringConvertible'
+        return ['CustomStringConvertible']
 
     def processClass(self, swiftClass):
         # FIXME: always public
@@ -850,7 +900,7 @@ class Printable():
     p = ", ".join(["%s=\(%s)" % (v.name, v.name) for v in clazz.variables])
 %>
 public var description: String {
-    return "${clazz.name}(${p})
+    return "${clazz.name}(${p})"
 }
 ''')
         return indent(template.render(clazz=swiftClass))
@@ -878,11 +928,11 @@ public var description: String {
 class EnumStaticInit():
     @property
     def protocolClass(self):
-        return None
+        return []
 
     @property
     def protocolEnum(self):
-        return None
+        return []
 
     def processClass(self, swiftClass):
         return None
@@ -910,11 +960,11 @@ public static func make${case._label}(${params}) -> ${enum.name} {
 class URLRequestHelper():
     @property
     def protocolClass(self):
-        return None
+        return []
 
     @property
     def protocolEnum(self):
-        return None
+        return []
 
     def processClass(self, swiftClass):
         return None
@@ -988,7 +1038,7 @@ public var params: [String: AnyObject] {
 class APIKitHelper():
     @property
     def protocolEnum(self):
-        return None
+        return []
 
     def processEnum(self, swiftEnum, rawType):
         if rawType != None:
