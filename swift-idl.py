@@ -230,6 +230,20 @@ class SwiftClass():
         self._name = node['key.name']
         self.isStruct = node['key.kind'] == 'source.lang.swift.decl.struct'
 
+        def getAnnotations(tokens, node):
+            ttr = tokenrange(tokens, node['key.offset'], node['key.length'])
+            tts = [tokens[i] for i in ttr]
+            lineNumber = tts[0]['lineNumber']
+
+            for t in tts:
+                if t['lineNumber'] == lineNumber and t['type'] == 'source.lang.swift.syntaxtype.comment':
+                    content = t['content']
+                    cs = content.split('//')
+                    if len(cs) >= 2:
+                        # the first comment area is only checked
+                        return parseAnnotation(unicode(cs[1]))
+            return {}
+
         def getVariables(a, n):
             if n.get('key.kind', None) == 'source.lang.swift.decl.var.instance':
                 return a + [SwiftVariable(tokens, n)]
@@ -237,6 +251,8 @@ class SwiftClass():
 
         self._variables = reduce(getVariables, node['key.substructure'], [])
         self._inheritedTypes = map(lambda e: e['key.name'], node.get('key.inheritedtypes', []))
+
+        self._annotations = getAnnotations(tokens, node)
 
         self._innerClassesOrEnums = []
         subs = node.get('key.substructure', None)
