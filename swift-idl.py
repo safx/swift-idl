@@ -333,7 +333,7 @@ class SwiftVariable():
         lineNumber = tts[-1]['lineNumber']
         ln = t['lineNumber']
 
-        while lineNumber == ln:
+        while lineNumber == ln and pos + 1 < len(tokens):
             if t['type'] != 'source.lang.swift.syntaxtype.comment':
                 break
             self._parsedDeclaration += t['content']
@@ -1185,37 +1185,38 @@ def gatherIdlProtocol():
     return flatprotos
 
 
-parser = argparse.ArgumentParser(description=PROGRAM_NAME + ': Swift source generator from Swift')
-parser.add_argument('project', type=str, nargs='?', default='IDL.xcodeproj', help='project to parse')
-parser.add_argument('scheme', type=str, nargs='?', default='IDL', help='sceheme to parse')
-parser.add_argument('-o', '--output_dir', type=str, default='out', help='directory to output')
-parser.add_argument('-f', '--force', action='store_true', help='force to output')
-args = parser.parse_args()
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description=PROGRAM_NAME + ': Swift source generator from Swift')
+    parser.add_argument('project', type=str, nargs='?', default='IDL.xcodeproj', help='project to parse')
+    parser.add_argument('scheme', type=str, nargs='?', default='IDL', help='sceheme to parse')
+    parser.add_argument('-o', '--output_dir', type=str, default='out', help='directory to output')
+    parser.add_argument('-f', '--force', action='store_true', help='force to output')
+    args = parser.parse_args()
 
-if not os.path.isdir(args.output_dir):
-    print('output directory not found: ' + args.output_dir)
-    exit(0)
-
-parsed = sourcekitten_doc(args.project, args.scheme)
-protocols = gatherIdlProtocol()
-
-classOrEnums = processProject(getClassOrEnum, parsed)
-
-for filepath, coe in classOrEnums.items():
-    if len(coe) == 0: continue
-    head, filename = os.path.split(filepath)
-
-    outpath = os.path.join(args.output_dir, filename)
-    exists = os.path.exists(outpath)
-    if not args.force and exists:
-        print('Error: output file is already exists: ' + outpath)
+    if not os.path.isdir(args.output_dir):
+        print('output directory not found: ' + args.output_dir)
         exit(0)
 
-    with file(outpath, 'w') as out:
-        print(outpath + (' (overwritten)' if exists else ''))
+    parsed = sourcekitten_doc(args.project, args.scheme)
+    protocols = gatherIdlProtocol()
 
-        out.write('// This file was auto-generated from %s with %s.' % (filename, PROGRAM_NAME))
-        out.write('\n\n')
-        out.write('import Foundation')
-        out.write('\n\n')
-        map(lambda e: out.write(e.getDeclarationString(protocols) + '\n\n'), coe)
+    classOrEnums = processProject(getClassOrEnum, parsed)
+
+    for filepath, coe in classOrEnums.items():
+        if len(coe) == 0: continue
+        head, filename = os.path.split(filepath)
+
+        outpath = os.path.join(args.output_dir, filename)
+        exists = os.path.exists(outpath)
+        if not args.force and exists:
+            print('Error: output file is already exists: ' + outpath)
+            exit(0)
+
+        with file(outpath, 'w') as out:
+            print(outpath + (' (overwritten)' if exists else ''))
+
+            out.write('// This file was auto-generated from %s with %s.' % (filename, PROGRAM_NAME))
+            out.write('\n\n')
+            out.write('import Foundation')
+            out.write('\n\n')
+            map(lambda e: out.write(e.getDeclarationString(protocols) + '\n\n'), coe)
