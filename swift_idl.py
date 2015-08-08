@@ -103,6 +103,17 @@ def tokenrange(tokens, offset, length):
 
 ### Swift Typename
 
+class SwiftTypealias():
+    def __init__(self, name, assignment):
+        self._name       = name
+        self._assignment = assignment
+
+    @property
+    def name(self): return self._name
+
+    @property
+    def assignment(self): return self._assignment
+
 class SwiftTypename():
     def __init__(self, typename):
         self._typename = typename
@@ -111,8 +122,7 @@ class SwiftTypename():
         return self._typename
 
     @property
-    def baseTypename(self):
-        return self._typename
+    def baseTypename(self): return self._typename
 
 class SwiftArray():
     def __init__(self, targetClass):
@@ -129,13 +139,10 @@ class SwiftOptional():
     def __init__(self, targetClass):
         self._targetClass = targetClass
 
-    def __repr__(self):
-        return str(self._targetClass) + '?'
+    def __repr__(self): return str(self._targetClass) + '?'
 
     @property
-    def baseTypename(self):
-        return self._targetClass.baseTypename
-
+    def baseTypename(self): return self._targetClass.baseTypename
 
 def parseTypename(typename):
     if typename[-1] == '?':
@@ -261,10 +268,11 @@ ${s}
         return indent(output, level * 4)
 
 class SwiftClass(SwiftVariableList):
-    def __init__(self, name, decltype, variables, inheritedTypes, annotations, substructure):
+    def __init__(self, name, decltype, variables, inheritedTypes, typealiases, annotations, substructure):
         super(SwiftClass, self).__init__(name, variables, annotations)
         self._decltype       = decltype
         self._inheritedTypes = inheritedTypes
+        self._typealiases    = typealiases
         self._substructure   = substructure
 
     @property
@@ -277,12 +285,18 @@ class SwiftClass(SwiftVariableList):
     def decltype(self): return self._decltype
 
     @property
-    def static(self): return 'static' if self._decltype == 'struct' else 'class'
+    def typealiases(self): return self._typealiases
 
+    @property
+    def static(self): return 'static' if self._decltype == 'struct' else 'class'
 
     def getDeclarationString(self, protocols, level=0):
         template = Template('''
 public ${clazz.decltype} ${clazz.name}${inh} {
+    % for a in clazz.typealiases:
+    typealias ${a.name} = ${a.assignment}
+    % endfor
+//
     % for v in clazz.variables:
     ${v.parsedDeclarationWithoutDefaultValue}
     % endfor
@@ -316,6 +330,24 @@ def visitProtocol(node, clazz):
     return SwiftProtocol(name, inheritedtypes, clazz)
 
 def visitClass(node, tokens):
+    # `sourcekitten doc` doesn't return `typealias` information. So we have to process.
+    #   * You must to declare typealias at the beginning of body in class.
+    def getTypealiases():
+        aliases = []
+        begin = None
+        for i in tokenrange(tokens, node["key.bodyoffset"], node["key.bodylength"]):
+            t = tokens[i]
+            if t.tokenType == 'source.lang.swift.syntaxtype.keyword':
+                if t.content == 'typealias':
+                    if begin != None:
+                        aliases.append(visitTypealias([tokens[x] for x in range(begin, i)]))
+                    begin = i
+                else:
+                    if begin != None:
+                        aliases.append(visitTypealias([tokens[x] for x in range(begin, i)]))
+                    break
+        return aliases
+
     def getVariables(a, n):
         if n.get('key.kind', None) == 'source.lang.swift.decl.var.instance':
             return a + [visitVariable(n, tokens)]
@@ -328,18 +360,18 @@ def visitClass(node, tokens):
     inheritedTypes = map(lambda e: e['key.name'], node.get('key.inheritedtypes', []))
 
     annotations = getAnnotations([tokens[i] for i in tokenrange(tokens, node['key.offset'], node['key.length'])])
+    typealiases = getTypealiases()
 
     innerDecls = []
     subs = node.get('key.substructure', None)
     if subs:
         innerDecls = visitSubstructure(getDeclarations, tokens, subs, [])
 
-    return SwiftClass(name, decltype, variables, inheritedTypes, annotations, innerDecls)
+    return SwiftClass(name, decltype, variables, inheritedTypes, typealiases, annotations, innerDecls)
 
 def visitEnum(node, tokens):
     # `sourcekitten doc` doesn't return `case` information. So we have to process.
-    # LIMITATION:
-    #   * You hove to declare `case`s of its enum first when you'll contain sub enums, due to parsing limitation.
+    #   * You hove to declare `case`s at the beginning of body of enum when you'll contain sub enums, due to parsing limitation.
     #   * You cannot include tuple in case.
     def getCases(tokens, offset, length):
         cases = []
@@ -424,6 +456,30 @@ def visitCase(tokens):
     annotations = getAnnotations(tokens)
     return SwiftCase(label, assocVals, annotations)
 
+def visitTypealias(tokens):
+    #''.join([e.content for e in tokens])
+    assert(tokens[0].content == 'typealias' and tokens[0].tokenType == 'source.lang.swift.syntaxtype.keyword')
+    assert(tokens[1].tokenType == 'omittedtoken')
+
+    label = None
+    typeident_base = None
+    before = ''
+    after = ''
+    for t in tokens[2:]:
+        if t.tokenType == 'source.lang.swift.syntaxtype.identifier':
+            assert(label == None)
+            label = t.content
+        elif t.tokenType == 'source.lang.swift.syntaxtype.typeidentifier':
+            typeident_base = t.content
+        elif t.tokenType == 'omittedtoken':
+            if typeident_base != None:
+                after = t.content.strip()
+            elif label != None:
+                before = re.sub(r'.+=\s+', '', t.content)
+
+    typeident = before + typeident_base + after
+    return SwiftTypealias(label, typeident)
+
 def getTokenForDecl(tokens, offset, length):
     return [tokens[i] for i in getRangeForDecl(tokens, offset, length)]
 
@@ -499,13 +555,12 @@ class JSONAnnotation:
 
 
 class RouterAnnotation:
-    def __init__(self, case):
-        anon_dic = case._annotations # FIXME: private access
-        self._case = case
+    def __init__(self, case_or_class):
+        self._variables = case_or_class.variables
         self.method = 'GET'
-        self.path = case._label # FIXME: private access
+        self.path = case_or_class.name
 
-        annons = anon_dic.get('router', [''])
+        annons = case_or_class.annotations.get('router', [''])
 
         if len(annons) > 0:
             method = annons[0].upper()
@@ -520,7 +575,7 @@ class RouterAnnotation:
 
     def paramSets(self):
         pathParams = re.findall(r'\(([^)]+)\)', self.path)
-        caseParams = [i.name for i in self._case._assocVals if i.name != None] # FIXME: private access
+        caseParams = [i.name for i in self._variables if i.name != None] # FIXME: private access
         return (pathParams, caseParams)
 
     @property
@@ -969,6 +1024,58 @@ public var params: [String: AnyObject] {
 ''')
             return indent(template.render(enum=swiftEnum, annotations={'router': RouterAnnotation}))
 
+
+class APIKitHelper():
+    @property
+    def protocolClass(self): return []
+
+    def processClass(self, swiftClass):
+        template = Template('''
+<%
+ anon = annotations['router']
+ an = anon(clazz)
+%>
+public var method: String {
+    return ${an.method}"
+}
+//
+public var path: String {
+    return "${an.path}"
+}
+//
+public var params: [String: AnyObject] {
+    <%
+        def toJsonString(info):
+             if info.isArray: return info.name + '.map { $0.toJSON() }'
+             return info.name + '.toJSON()'
+
+        an = anon(clazz)
+        pathParams, caseParams = an.paramSets()
+        diff = set(caseParams).difference(set(pathParams))
+
+        lets = [i if i in diff else '_' for i in caseParams]
+        letString = ('(let (' + ', '.join(lets) + '))') if len(diff) > 0 else ''
+
+        dicx = [i for i in clazz.variables if i.name in diff]
+
+        inits   = ['"%s": %s' % (i.name, toJsonString(i)) for i in dicx if not i.isOptional]
+        initStr = ', '.join(inits) if len(inits) else ':'
+
+        params = ['%s.map { p["%s"] = $0.toJSON() }' % (i.name, i_name) for i in dicx if i.isOptional]
+    %>
+    % if len(diff) > 0 and len(params) > 0:
+    var p: [String: AnyObject] = [${initStr}]
+    % for p in params:
+    ${p}
+    % endfor
+    return p
+    % else:
+    return [${initStr}]
+    % endif
+
+}
+''')
+        return indent(template.render(clazz=swiftClass, annotations={'router': RouterAnnotation}))
 
 
 ### command line pipe lines
