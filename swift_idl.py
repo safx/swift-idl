@@ -154,8 +154,7 @@ def parseTypename(typename):
 
 ### Swift structures base
 
-# variable of tuple in case
-class SwiftTupleVariable(object):
+class SwiftVariableBase(object):
     def __init__(self, name, typename):
         self._name     = name     # maybe None
         self._typename = typename
@@ -179,8 +178,28 @@ class SwiftTupleVariable(object):
     def baseTypename(self):
         return parseTypename(self._typename).baseTypename
 
+# variable of tuple in case
+class SwiftTupleVariable(SwiftVariableBase):
+    def __init__(self, name, typename, position):
+        super(SwiftTupleVariable, self).__init__(name, typename)
+        self._positon = position
+
+    @property
+    def varname(self):
+        return self._name if self._name else 'v' + str(self._positon)
+
+    @property
+    def keyname(self):
+        return self._name if self._name else str(self._positon)
+
+    @property
+    def declaredString(self):
+        if self._name:
+            return self._name + ': ' + self.typename
+        return self.typename
+
 # variable in struct or class
-class SwiftVariable(SwiftTupleVariable):
+class SwiftVariable(SwiftVariableBase):
     def __init__(self, name, typename, defaultValue, accessibility, annotations, parsedDeclaration):
         super(SwiftVariable, self).__init__(name, typename)
         self._defaultValue  = defaultValue
@@ -189,13 +208,22 @@ class SwiftVariable(SwiftTupleVariable):
         self._parsedDeclaration = parsedDeclaration
 
     @property
-    def defaultValue(self): return self._defaultValue
-
-    @property
     def accessibility(self): return self._accessibility
 
     @property
     def annotations(self): return self._annotations
+
+    @property
+    def hasDefaultValue(self):
+        return self.isOptional or self._defaultValue != None
+
+    @property
+    def defaultValue(self):
+        if self._defaultValue:
+            return self._defaultValue
+        elif self.isOptional:
+            return 'nil'
+        return self.typename + '()'
 
     @property
     def parsedDeclarationWithoutDefaultValue(self):
@@ -220,7 +248,24 @@ class SwiftVariableList(object):
     def annotations(self): return self._annotations
 
 class SwiftCase(SwiftVariableList):
-    pass
+    def __init__(self, name, variables, annotations, value):
+        super(SwiftCase, self).__init__(name, variables, annotations)
+        self._value  = value
+
+    @property
+    def letString(self):
+        if len(self.variables) == 0: return ''
+        return '(let (' + ', '.join([i.varname for i in self.variables]) + '))'
+
+    @property
+    def declaredString(self):
+        if self._value != None:
+            return str(self._name) + ' = ' + str(self._value)
+        else:
+            p = ''
+            if len(self._variables) > 0:
+                p = '(' + ', '.join([e.declaredString for e in self._variables]) + ')'
+            return str(self._name) + p
 
 class SwiftEnum(object):
     def __init__(self, name, cases, inheritedTypes, annotations, substructure):
@@ -237,13 +282,29 @@ class SwiftEnum(object):
     def cases(self): return self._cases
 
     @property
+    def inheritedTypes(self): return self._inheritedTypes
+
+    @property
     def annotations(self): return self._annotations
+
+    @property
+    def isRawType(self):
+        if len(self._inheritedTypes) > 0:
+            n = self._inheritedTypes[0]
+            return n in ['String', 'Int', 'Float', 'Character'] # FIXME: naive guess
+        return False
+
+    @property
+    def rawType(self):
+        if self.isRawType:
+            return self._inheritedTypes[0]
+        return None
 
     def getDeclarationString(self, protocols, level = 0):
         template = Template('''
 public enum ${enum.name}${inh} {
     % for c in enum._cases:
-    case ${c}
+    case ${c.declaredString}
     % endfor
 
 % for r in rs:
@@ -258,13 +319,13 @@ ${s}
 }
 ''')
         ps = getIdlProtocols(protocols, self._inheritedTypes, 'EnumDefault')
-        rawType = self.getRawType(protocols)
+        rawType = self.rawType
         typeInheritances = sum([e.protocolEnum for e in ps], [rawType] if rawType != None else [])
 
         output = template.render(enum=self,
-                                 rs=filter(lambda e: e != None, map(lambda e: e.processEnum(self, rawType), ps)),
+                                 rs=filter(lambda e: e != None, map(lambda e: e.processEnum(self), ps)),
                                  inh=': ' + ', '.join(typeInheritances) if len(typeInheritances) > 0 else '',
-                                 sub=map(lambda e: e.getDeclarationString(protocols, level + 1), self._innerClassesOrEnums))
+                                 sub=map(lambda e: e.getDeclarationString(protocols, level + 1), self._substructure))
         return indent(output, level * 4)
 
 class SwiftClass(SwiftVariableList):
@@ -294,9 +355,8 @@ class SwiftClass(SwiftVariableList):
         template = Template('''
 public ${clazz.decltype} ${clazz.name}${inh} {
     % for a in clazz.typealiases:
-    typealias ${a.name} = ${a.assignment}
+    public typealias ${a.name} = ${a.assignment}
     % endfor
-//
     % for v in clazz.variables:
     ${v.parsedDeclarationWithoutDefaultValue}
     % endfor
@@ -313,7 +373,7 @@ ${s}
 }
 ''')
         ps = getIdlProtocols(protocols, self._inheritedTypes, 'ClassDefault')
-        typeInheritances = sum([e.protocolClass for e in ps], [])
+        typeInheritances = sum([e.protocolClass(self) for e in ps], [])
 
         output = template.render(clazz=self,
                                  rs=[e.processClass(self) for e in ps],
@@ -335,7 +395,8 @@ def visitClass(node, tokens):
     def getTypealiases():
         aliases = []
         begin = None
-        for i in tokenrange(tokens, node["key.bodyoffset"], node["key.bodylength"]):
+        tkrange = tokenrange(tokens, node['key.bodyoffset'], node['key.bodylength'])
+        for i in tkrange:
             t = tokens[i]
             if t.tokenType == 'source.lang.swift.syntaxtype.keyword':
                 if t.content == 'typealias':
@@ -346,6 +407,9 @@ def visitClass(node, tokens):
                     if begin != None:
                         aliases.append(visitTypealias([tokens[x] for x in range(begin, i)]))
                     break
+            elif i == tkrange[-1] and begin != None:
+                aliases.append(visitTypealias([tokens[x] for x in range(begin, i + 1)]))
+
         return aliases
 
     def getVariables(a, n):
@@ -370,9 +434,6 @@ def visitClass(node, tokens):
     return SwiftClass(name, decltype, variables, inheritedTypes, typealiases, annotations, innerDecls)
 
 def visitEnum(node, tokens):
-    # `sourcekitten doc` doesn't return `case` information. So we have to process.
-    #   * You hove to declare `case`s at the beginning of body of enum when you'll contain sub enums, due to parsing limitation.
-    #   * You cannot include tuple in case.
     def getCases(tokens, offset, length):
         cases = []
         begin = None
@@ -400,7 +461,7 @@ def visitEnum(node, tokens):
     innerDecls = []
     subs = node.get('key.substructure', None)
     if subs:
-        innerDecls = visitSubstructure(getClassOrEnum, tokens, subs, [])
+        innerDecls = visitSubstructure(getDeclarations, tokens, subs, [])
 
     annotations = {} # FIXME
     return SwiftEnum(name, cases, inheritedTypes, annotations, innerDecls)
@@ -409,15 +470,22 @@ def visitVariable(node, tokens):
     offset = node['key.offset']
     length = node['key.length']
 
+    def getContent(t):
+        if t.tokenType == 'omittedtoken':
+            return t.content.split('\n')[0].split('}')[0]
+        return t.content
+
     def getDefaultValue():
         tkrange = tokenrange(tokens, offset, length)
         var_tokens = [tokens[i] for i in tkrange]
-        eqs = [e[0] for e in enumerate(var_tokens) if e[1].tokenType == 'omittedtoken' and e[1].content.strip() == '=']
+        eqs = [e[0] for e in enumerate(var_tokens) if e[1].tokenType == 'omittedtoken' and e[1].content.find('=') >= 0]
         assert(len(eqs) <= 1)
         if len(eqs) == 1:
             p = eqs[0]
-            if p + 1 < len(var_tokens):
-                return var_tokens[p + 1].content
+            before = var_tokens[p].content.split('=')[1].split('\n')[0].split('}')[0].strip()
+            assign_tokens = var_tokens[p+1:]
+            value = before + ''.join([getContent(e) for e in assign_tokens]).strip()
+            return value if len(value) > 0 else None
         return None
 
     name          = node['key.name']
@@ -425,17 +493,22 @@ def visitVariable(node, tokens):
     defaultValue  = getDefaultValue()
     decl_tokens   = getTokenForDecl(tokens, offset, length)
     accessibility = None # FIXME
-    parsedDecl    = ''.join([i.content for i in decl_tokens]).strip() # FIXME: unused
+    parsedDecl    = ''.join([getContent(i) for i in decl_tokens]).strip() # FIXME: unused
     annotations   = getAnnotations(decl_tokens)
     return SwiftVariable(name, typename, defaultValue, accessibility, annotations, parsedDecl)
 
 def visitCase(tokens):
+    # `sourcekitten doc` doesn't return `case` information. So we have to process.
+    #   * You hove to declare `case`s at the beginning of body of enum when you'll contain sub enums, due to parsing limitation.
+    #   * You cannot include tuple in case.
     assert(tokens[0].content == 'case' and tokens[0].tokenType == 'source.lang.swift.syntaxtype.keyword')
     assert(tokens[1].tokenType == 'omittedtoken')
 
     label = None
+    value = None
     assocVals = []
     tuple_pair = None
+    position = 0
     for t in tokens[2:]:
         if t.tokenType == 'source.lang.swift.syntaxtype.identifier':
             if label == None:
@@ -446,18 +519,25 @@ def visitCase(tokens):
                 else:
                     tuple_pair = (tuple_pair[1], t.content)
         elif t.tokenType == 'omittedtoken':
-            if t.content.strip() == ',':
-                assocVals.append(SwiftTupleVariable(*tuple_pair))
+            # FIXME: This code would parse incorrectly in some cases.
+            if t.content.find(',') >= 0 or t.content.find(')') >= 0:
+                typename = tuple_pair[1]
+                if t.content.find('?') >= 0:
+                    typename += '?'
+                if t.content.find(']') >= 0:
+                    typename = '[' + typename + ']'
+                assocVals.append(SwiftTupleVariable(tuple_pair[0], typename, position))
                 tuple_pair = None
-
-    if tuple_pair != None:
-        assocVals.append(SwiftTupleVariable(*tuple_pair))
+        elif t.isComment:
+            pass
+        else:
+            assert(value == None)
+            value = t.content # FIXME: check tokenType
 
     annotations = getAnnotations(tokens)
-    return SwiftCase(label, assocVals, annotations)
+    return SwiftCase(label, assocVals, annotations, value)
 
 def visitTypealias(tokens):
-    #''.join([e.content for e in tokens])
     assert(tokens[0].content == 'typealias' and tokens[0].tokenType == 'source.lang.swift.syntaxtype.keyword')
     assert(tokens[1].tokenType == 'omittedtoken')
 
@@ -472,8 +552,9 @@ def visitTypealias(tokens):
         elif t.tokenType == 'source.lang.swift.syntaxtype.typeidentifier':
             typeident_base = t.content
         elif t.tokenType == 'omittedtoken':
+            # FIXME: This code would parse incorrectly in some cases.
             if typeident_base != None:
-                after = t.content.strip()
+                after = re.sub(r'[\n{].+', '', t.content)
             elif label != None:
                 before = re.sub(r'.+=\s+', '', t.content)
 
@@ -646,13 +727,12 @@ def indent(text, width=4):
 ### Render Class (IDL protocols)
 
 class ClassInit():
-    @property
-    def protocolClass(self): return []
+    def protocolClass(self, swiftClass): return []
 
     def processClass(self, swiftClass):
         template = Template('''
 <%
-    p = ', '.join([v.name + ': ' + v.typename + (' = ' + v.defaultValue if v.defaultValue else '') for v in clazz.variables])
+    p = ', '.join([v.name + ': ' + v.typename + (' = ' + v.defaultValue if v.hasDefaultValue else '') for v in clazz.variables])
 %>
 public init(${p}) {
     % for v in clazz.variables:
@@ -663,8 +743,7 @@ public init(${p}) {
         return indent(template.render(clazz=swiftClass))
 
 class JSONDecodable():
-    @property
-    def protocolClass(self): return ['JSONDecodable']
+    def protocolClass(self, swiftClass): return ['JSONDecodable']
 
     @property
     def protocolEnum(self): return ['JSONDecodable']
@@ -686,7 +765,7 @@ public ${clazz.static} func parseJSON(data: AnyObject) throws -> ${clazz.name} {
     let ${v.name}: ${v.typename}
     if let v: AnyObject = data["${an.jsonLabel}"] {
         if v is NSNull {
-        % if v.defaultValue:
+        % if v.hasDefaultValue:
             ${v.name} = ${v.defaultValue}
         % else:
             throw JSONDecodeError.NonNullablle(key: "${an.jsonLabel}")
@@ -705,7 +784,7 @@ public ${clazz.static} func parseJSON(data: AnyObject) throws -> ${clazz.name} {
             }
         }
     } else {
-    % if v.defaultValue:
+    % if v.hasDefaultValue:
         ${v.name} = ${v.defaultValue}
     % else:
         throw JSONDecodeError.MissingKey(key: "${an.jsonLabel}")
@@ -720,17 +799,17 @@ public ${clazz.static} func parseJSON(data: AnyObject) throws -> ${clazz.name} {
 ''')
         return indent(template.render(clazz=swiftClass, annotations={'json': JSONAnnotation}))
 
-    def processEnum(self, swiftEnum, rawType):
+    def processEnum(self, swiftEnum):
         template = Template('''
 public static func parseJSON(data: AnyObject) throws -> ${enum.name} {
-% if rawType:
+% if enum.rawType:
     if let v = data as? ${enum.inheritedTypes[0]}, val = ${enum.name}(rawValue: v) {
         return val
     }
 % else:
 % for case in enum._cases:
     if let obj: AnyObject = data["${case._label}"] {
-        % for v in case._assocVals:
+        % for v in case.variables:
         let ${v.name}: ${v.typename}
         if let vo = obj["${v.keyname}"], v = vo {
             do {
@@ -744,7 +823,7 @@ public static func parseJSON(data: AnyObject) throws -> ${enum.name} {
         % endfor
         //
         <%
-            init = ', '.join([(v.name + ': ' + v.name) if v.name else v.name for v in case._assocVals])
+            init = ', '.join([(v.name + ': ' + v.name) if v.name else v.name for v in case.variables])
         %>
         return .${case._label}(${init})
     }
@@ -753,12 +832,11 @@ public static func parseJSON(data: AnyObject) throws -> ${enum.name} {
     throw JSONDecodeError.ValueTranslationFailed(type: "${enum.name}")
 }
 ''')
-        return indent(template.render(enum=swiftEnum, rawType=rawType, annotations={'json': JSONAnnotation}))
+        return indent(template.render(enum=swiftEnum, annotations={'json': JSONAnnotation}))
 
 
 class JSONEncodable():
-    @property
-    def protocolClass(self): return ['JSONEncodable']
+    def protocolClass(self, swiftClass): return ['JSONEncodable']
 
     @property
     def protocolEnum(self): return []
@@ -786,7 +864,7 @@ public func toJSON() -> [String: AnyObject] {
 ''')
         return indent(template.render(clazz=swiftClass, annotations={'json': JSONAnnotation}))
 
-    def processEnum(self, swiftEnum, rawType):
+    def processEnum(self, swiftEnum):
         template = Template('''
 public func toJSON() -> ${enum.inheritedTypes[0]} {
     return rawValue
@@ -795,8 +873,7 @@ public func toJSON() -> ${enum.inheritedTypes[0]} {
         return indent(template.render(enum=swiftEnum, annotations={'json': JSONAnnotation}))
 
 class EJDB():
-    @property
-    def protocolClass(self): return []
+    def protocolClass(self, swiftClass): return []
 
     def processClass(self, swiftClass):
         template = Template('''
@@ -813,13 +890,13 @@ public ${clazz.static} func parseBSON(iter: BSONIterater) throws -> ${clazz.name
         let type = itor.find("${an.jsonLabel}")
 
         if type == BSON_UNDEFINED {
-        % if v.defaultValue:
+        % if v.hasDefaultValue:
             ${v.name} = ${v.defaultValue}
         % else:
             throw BSONDecodeError.MissingKey(key: "${an.jsonLabel}")
         % endif
         } else if type == BSON_NULL {
-        % if v.defaultValue:
+        % if v.hasDefaultValue:
             ${v.name} = ${v.defaultValue}
         % else:
             throw JSONDecodeError.TypeMismatch(key: "${an.jsonLabel}", type: "${v.baseTypename}")
@@ -845,12 +922,11 @@ class ErrorType():
     @property
     def protocolEnum(self): return ['ErrorType']
 
-    def processEnum(self, swiftEnum, rawType): return []
+    def processEnum(self, swiftEnum): return []
 
 
 class NSCoding():
-    @property
-    def protocolClass(self): return ['NSCoding']
+    def protocolClass(self, swiftClass): return ['NSCoding']
 
     def processClass(self, swiftClass):
         template = Template('''
@@ -893,8 +969,7 @@ public func encodeWithCoder(coder: NSCoder) {
 
 
 class Printable():
-    @property
-    def protocolClass(self): return ['CustomStringConvertible']
+    def protocolClass(self, swiftClass): return ['CustomStringConvertible']
 
     @property
     def protocolEnum(self): return ['CustomStringConvertible']
@@ -911,8 +986,8 @@ public var description: String {
 ''')
         return indent(template.render(clazz=swiftClass))
 
-    def processEnum(self, swiftEnum, rawType):
-        if rawType != None:
+    def processEnum(self, swiftEnum):
+        if swiftEnum.isRawType:
             return '    public var description: String { return rawValue }'
 
         template = Template('''
@@ -920,10 +995,10 @@ public var description: String {
     switch self {
     % for case in enum._cases:
     <%
-        av  = ['%s=\(%s)' % (v._name, v._name) if v._name else '\(%s)' % v.varname for v in case._assocVals]
+        av  = ['%s=\(%s)' % (v.name, v.name) if v.name else '\(%s)' % v.varname for v in case.variables]
         out = '(' + ', '.join(av) + ')' if len(av) else ''
     %>
-    case .${case._label}${case.letString}: return "${case._label}${out}"
+    case .${case.name}${case.letString}: return "${case.name}${out}"
     % endfor
     }
 }
@@ -935,15 +1010,15 @@ class EnumStaticInit():
     @property
     def protocolEnum(self): return []
 
-    def processEnum(self, swiftEnum, rawType):
-        if rawType != None:
+    def processEnum(self, swiftEnum):
+        if swiftEnum.isRawType:
             return None # FIXME
         else:
             template = Template('''
 % for case in enum._cases:
 <%
-    ais = map(lambda x: '%s: %s = %s()' % (x._name, x.typename, x.typename) if x._name else 'arg%d: %s = %s()' % (x._positon, x.typename, x.typename), case._assocVals)
-    cis = map(lambda x: '%s: %s' % (x._name, x._name) if x._name else 'arg%d' % x._positon, case._assocVals)
+    ais = map(lambda x: '%s: %s = %s()' % (x._name, x.typename, x.typename) if x._name else 'arg%d: %s = %s()' % (x._positon, x.typename, x.typename), case.variables)
+    cis = map(lambda x: '%s: %s' % (x._name, x._name) if x._name else 'arg%d' % x._positon, case.variables)
     params = ", ".join(ais)
     out    = '(' + ', '.join(cis) + ')' if len(cis) > 0 else ''
 %>
@@ -959,8 +1034,8 @@ class URLRequestHelper():
     @property
     def protocolEnum(self): return []
 
-    def processEnum(self, swiftEnum, rawType):
-        if rawType != None:
+    def processEnum(self, swiftEnum):
+        if swiftEnum.isRawType:
             return None # FIXME
         else:
             template = Template('''
@@ -998,7 +1073,7 @@ public var params: [String: AnyObject] {
         lets = [i if i in diff else '_' for i in caseParams]
         letString = ('(let (' + ', '.join(lets) + '))') if len(diff) > 0 else ''
 
-        dicx = [i for i in case._assocVals if i._name in diff]
+        dicx = [i for i in case.variables if i._name in diff]
 
         inits   = ['"%s": %s' % (i._name, toJsonString(i)) for i in dicx if not i._isOptional]
         initStr = ', '.join(inits) if len(inits) else ':'
@@ -1027,7 +1102,17 @@ public var params: [String: AnyObject] {
 
 class APIKitHelper():
     @property
-    def protocolClass(self): return []
+    def protocolEnum(self): return []
+
+    def processEnum(self, swiftClass):
+        return None
+
+    def protocolClass(self, swiftClass):
+        # add typealias Response
+        if len([e for e in swiftClass.typealiases if e.name == 'Response']) == 0:
+            swiftClass.typealiases.append(SwiftTypealias('Response', swiftClass.name + 'Response'))
+
+        return ['APIKitRequest']
 
     def processClass(self, swiftClass):
         template = Template('''
@@ -1035,8 +1120,8 @@ class APIKitHelper():
  anon = annotations['router']
  an = anon(clazz)
 %>
-public var method: String {
-    return ${an.method}"
+public var method: HTTPMethod {
+    return .${an.method}
 }
 //
 public var path: String {
@@ -1061,7 +1146,7 @@ public var params: [String: AnyObject] {
         inits   = ['"%s": %s' % (i.name, toJsonString(i)) for i in dicx if not i.isOptional]
         initStr = ', '.join(inits) if len(inits) else ':'
 
-        params = ['%s.map { p["%s"] = $0.toJSON() }' % (i.name, i_name) for i in dicx if i.isOptional]
+        params = ['%s.map { p["%s"] = $0.toJSON() }' % (i.name, i.name) for i in dicx if i.isOptional]
     %>
     % if len(diff) > 0 and len(params) > 0:
     var p: [String: AnyObject] = [${initStr}]
