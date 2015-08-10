@@ -231,6 +231,9 @@ class SwiftVariable(SwiftVariableBase):
         s = self._parsedDeclaration.split('=')
         return 'public ' + s[0].strip()
 
+    def annotation(self, name):
+        return getAnnotationMap()[name](self)
+
 # tuple in case or variables in struct or class
 class SwiftVariableList(object):
     def __init__(self, name, variables, annotations):
@@ -246,6 +249,9 @@ class SwiftVariableList(object):
 
     @property
     def annotations(self): return self._annotations
+
+    def annotation(self, name):
+        return getAnnotationMap()[name](self)
 
 class SwiftCase(SwiftVariableList):
     def __init__(self, name, variables, annotations, value):
@@ -299,6 +305,9 @@ class SwiftEnum(object):
         if self.isRawType:
             return self._inheritedTypes[0]
         return None
+
+    def annotation(self, name):
+        return getAnnotationMap()[name](self)
 
     def getDeclarationString(self, protocols, level = 0):
         template = Template('''
@@ -398,10 +407,15 @@ def visitClass(node, tokens):
         tkrange = tokenrange(tokens, node['key.bodyoffset'], node['key.bodylength'])
         for i in tkrange:
             t = tokens[i]
+            if t.tokenType == 'source.lang.swift.syntaxtype.attribute.builtin':
+                if begin != None:
+                    aliases.append(visitTypealias([tokens[x] for x in range(begin, i)]))
+                    begin = None
             if t.tokenType == 'source.lang.swift.syntaxtype.keyword':
                 if t.content == 'typealias':
                     if begin != None:
                         aliases.append(visitTypealias([tokens[x] for x in range(begin, i)]))
+                        begin = None
                     begin = i
                 else:
                     if begin != None:
@@ -615,7 +629,7 @@ def visitSubstructure(func, tokens, sublist, initial_list):
 
 class JSONAnnotation:
     def __init__(self, var):
-        anon_dic = var._annotations # FIXME: private access
+        anon_dic = var.annotations
         self.jsonOmitValue = False
         self.jsonLabel = var.name
 
@@ -656,22 +670,28 @@ class RouterAnnotation:
 
     def paramSets(self):
         pathParams = re.findall(r'\(([^)]+)\)', self.path)
-        caseParams = [i.name for i in self._variables if i.name != None] # FIXME: private access
-        return (pathParams, caseParams)
+        params = [i.name for i in self._variables if i.name != None and i.annotations.get('router', [''])[0] != '-']
+        return (pathParams, params)
 
     @property
     def casePathString(self):
-        pathParams, caseParams = self.paramSets()
-        union = set(pathParams).intersection(set(caseParams))
+        pathParams, params = self.paramSets()
+        union = set(pathParams).intersection(set(params))
         if len(union) == 0: return ''
-        lets = [i if i in union else '_' for i in caseParams]
+        lets = [i if i in union else '_' for i in params]
         return '(let (' + ', '.join(lets) + '))'
 
     @property
-    def caseParams(self):
-        pathParams, caseParams = self.paramSets()
-        diff = set(caseParams).difference(set(pathParams))
-        lets = [i if i in diff else None for i in caseParams]
+    def params(self):
+        pathParams, params = self.paramSets()
+        diff = set(params).difference(set(pathParams))
+        lets = [i if i in diff else None for i in params]
+
+def getAnnotationMap():
+    return {
+        'json'  : JSONAnnotation,
+        'router': RouterAnnotation
+    }
 
 ### Protocols class and functions
 
@@ -750,14 +770,13 @@ class JSONDecodable():
 
     def processClass(self, swiftClass):
         template = Template('''
-<% anon = annotations['json'] %>
 public ${clazz.static} func parseJSON(data: AnyObject) throws -> ${clazz.name} {
     if !(data is NSDictionary) {
         throw JSONDecodeError.TypeMismatch(key: "${clazz.name}", type: "NSDictionary")
     }
     % for v in clazz.variables:
     <%
-        an = anon(v)
+        an = v.annotation('json')
         parse = 'parseJSONArrayForNullable' if v.isArrayOfOptional else 'parseJSONArray'
     %>
     //
@@ -793,11 +812,11 @@ public ${clazz.static} func parseJSON(data: AnyObject) throws -> ${clazz.name} {
     % endif
     % endfor
     //
-    <% jsonInits = ', '.join([v.name + ': ' + v.name for v in clazz.variables if not anon(v).jsonOmitValue]) %>
+    <% jsonInits = ', '.join([v.name + ': ' + v.name for v in clazz.variables if not v.annotation('json').jsonOmitValue]) %>
     return ${clazz.name}(${jsonInits})
 }
 ''')
-        return indent(template.render(clazz=swiftClass, annotations={'json': JSONAnnotation}))
+        return indent(template.render(clazz=swiftClass))
 
     def processEnum(self, swiftEnum):
         template = Template('''
@@ -832,7 +851,7 @@ public static func parseJSON(data: AnyObject) throws -> ${enum.name} {
     throw JSONDecodeError.ValueTranslationFailed(type: "${enum.name}")
 }
 ''')
-        return indent(template.render(enum=swiftEnum, annotations={'json': JSONAnnotation}))
+        return indent(template.render(enum=swiftEnum))
 
 
 class JSONEncodable():
@@ -843,11 +862,10 @@ class JSONEncodable():
 
     def processClass(self, swiftClass):
         template = Template('''
-<%  anon = annotations['json'] %>
 public func toJSON() -> [String: AnyObject] {
     return [
     % for v in clazz.variables:
-    <% an = anon(v) %>
+    <% an = v.annotation('json') %>
     % if an.jsonOmitValue:
         <%doc>nohting</%doc>
     % elif v.isArray:
@@ -862,7 +880,7 @@ public func toJSON() -> [String: AnyObject] {
     ]
 }
 ''')
-        return indent(template.render(clazz=swiftClass, annotations={'json': JSONAnnotation}))
+        return indent(template.render(clazz=swiftClass))
 
     def processEnum(self, swiftEnum):
         template = Template('''
@@ -870,18 +888,17 @@ public func toJSON() -> ${enum.inheritedTypes[0]} {
     return rawValue
 }
 ''')
-        return indent(template.render(enum=swiftEnum, annotations={'json': JSONAnnotation}))
+        return indent(template.render(enum=swiftEnum))
 
 class EJDB():
     def protocolClass(self, swiftClass): return []
 
     def processClass(self, swiftClass):
         template = Template('''
-<% anon = annotations['json'] %>
 public ${clazz.static} func parseBSON(iter: BSONIterater) throws -> ${clazz.name} {
     % for v in clazz.variables:
     <%
-        an = anon(v)
+        an = v.annotation('json')
         parse = 'parseBSONArrayForNullable' if v.isArrayOfOptional else 'parseBSONArray'
     %>
     % if not an.jsonOmitValue:
@@ -912,11 +929,11 @@ public ${clazz.static} func parseBSON(iter: BSONIterater) throws -> ${clazz.name
     % endif
     //
     % endfor
-    <% jsonInits = ', '.join([v.name + ': ' + v.name for v in clazz.variables if not anon(v).jsonOmitValue]) %>
+    <% jsonInits = ', '.join([v.name + ': ' + v.name for v in clazz.variables if not v.annotation('json').jsonOmitValue]) %>
     return ${clazz.name}(${jsonInits})
 }
 ''')
-        return indent(template.render(clazz=swiftClass, annotations={'json': JSONAnnotation}))
+        return indent(template.render(clazz=swiftClass))
 
 class ErrorType():
     @property
@@ -1039,11 +1056,10 @@ class URLRequestHelper():
             return None # FIXME
         else:
             template = Template('''
-<% anon = annotations['router'] %>
 public var method: String {
     switch self {
     % for case in enum._cases:
-    <% an = anon(case) %>
+    <% an = case.annotation('router') %>
     case .${case._label}: return "${an.method}"
     % endfor
     }
@@ -1052,7 +1068,7 @@ public var method: String {
 public var path: String {
     switch self {
     % for case in enum._cases:
-    <% an = anon(case) %>
+    <% an = case.annotation('router') %>
     case .${case._label}${an.casePathString}: return "${an.path}"
     % endfor
     }
@@ -1066,11 +1082,11 @@ public var params: [String: AnyObject] {
              if info._isArray: return info._name + '.map { $0.toJSON() }'
              return info._name + '.toJSON()'
 
-        an = anon(case)
-        pathParams, caseParams = an.paramSets()
-        diff = set(caseParams).difference(set(pathParams))
+        an = case.annotation('router')
+        pathParams, params = an.paramSets()
+        diff = set(params).difference(set(pathParams))
 
-        lets = [i if i in diff else '_' for i in caseParams]
+        lets = [i if i in diff else '_' for i in params]
         letString = ('(let (' + ', '.join(lets) + '))') if len(diff) > 0 else ''
 
         dicx = [i for i in case.variables if i._name in diff]
@@ -1097,7 +1113,7 @@ public var params: [String: AnyObject] {
     }
 }
 ''')
-            return indent(template.render(enum=swiftEnum, annotations={'router': RouterAnnotation}))
+            return indent(template.render(enum=swiftEnum))
 
 
 class APIKitHelper():
@@ -1117,8 +1133,7 @@ class APIKitHelper():
     def processClass(self, swiftClass):
         template = Template('''
 <%
- anon = annotations['router']
- an = anon(clazz)
+ an = clazz.annotation('router')
 %>
 public var method: HTTPMethod {
     return .${an.method}
@@ -1134,11 +1149,10 @@ public var params: [String: AnyObject] {
              if info.isArray: return info.name + '.map { $0.toJSON() }'
              return info.name + '.toJSON()'
 
-        an = anon(clazz)
-        pathParams, caseParams = an.paramSets()
-        diff = set(caseParams).difference(set(pathParams))
+        pathParams, params = an.paramSets()
+        diff = set(params).difference(set(pathParams))
 
-        lets = [i if i in diff else '_' for i in caseParams]
+        lets = [i if i in diff else '_' for i in params]
         letString = ('(let (' + ', '.join(lets) + '))') if len(diff) > 0 else ''
 
         dicx = [i for i in clazz.variables if i.name in diff]
@@ -1160,7 +1174,7 @@ public var params: [String: AnyObject] {
 
 }
 ''')
-        return indent(template.render(clazz=swiftClass, annotations={'router': RouterAnnotation}))
+        return indent(template.render(clazz=swiftClass))
 
 
 ### command line pipe lines
