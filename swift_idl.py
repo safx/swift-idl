@@ -1131,8 +1131,7 @@ class APIKitHelper():
         if len([e for e in swiftClass.typealiases if e.name == 'Response']) == 0:
             # FIXME: set other location
             swiftClass.typealiases.append(SwiftTypealias('Response', swiftClass.name + 'Response'))
-
-        return ['APIKitRequest']
+        return []
 
     def processClass(self, swiftClass):
         template = Template('''
@@ -1147,7 +1146,7 @@ public var path: String {
     return "${an.path}"
 }
 //
-public var params: [String: AnyObject] {
+public var parameters: [String: AnyObject] {
     <%
         def toJsonString(info):
              if info.isArray: return info.name + '.map { $0.toJSON() }'
