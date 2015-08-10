@@ -24,7 +24,7 @@ class SwiftToken():
         self.tokenType = tokenType
 
     def __repr__(self):
-        return self.content
+        return self.content + ' ' + self.tokenType
 
     @property
     def isComment(self):
@@ -599,13 +599,13 @@ def getAnnotations(tokens):
                 return annons # FIXME: merge two or more annotation comments
     return {}
 
-def processProject(func, structure):
-    def getTokenList(filepath):
-        with file(filepath) as f:
-            source = f.read()
-            syntax = sourcekittenSyntax(filepath)
-            return getSwiftTokens(syntax, source)
+def getTokenList(filepath):
+    with file(filepath) as f:
+        source = f.read()
+        syntax = sourcekittenSyntax(filepath)
+        return getSwiftTokens(syntax, source)
 
+def processProject(func, structure):
     def visit(filepath, contents):
         sublist = contents.get('key.substructure', None)
         tokens = getTokenList(filepath)
@@ -874,11 +874,11 @@ public func toJSON() -> [String: AnyObject] {
         <%doc>nohting</%doc>
     % elif v.isArray:
         <% z = '(' + v.name + ' ?? [])' if v.isOptional else v.name %>
-        "${an.jsonLabel}": ${z}.map { $0.toJSON() }
+        "${an.jsonLabel}": ${z}.map { $0.toJSON() },
     % elif v.isOptional:
-        "${an.jsonLabel}": ${v.name}.map { $0.toJSON() } ?? NSNull()
+        "${an.jsonLabel}": ${v.name}.map { $0.toJSON() } ?? NSNull(),
     %else:
-        "${an.jsonLabel}": ${v.name}.toJSON()
+        "${an.jsonLabel}": ${v.name}.toJSON(),
     % endif
     % endfor
     ]
@@ -943,7 +943,7 @@ class ErrorType():
     @property
     def protocolEnum(self): return ['ErrorType']
 
-    def processEnum(self, swiftEnum): return []
+    def processEnum(self, swiftEnum): return None
 
 
 class NSCoding():
@@ -956,11 +956,11 @@ required public init?(coder: NSCoder) {
 
 % for v in clazz.variables:
 % if v.typename == 'Int':
-    ${v.name} = coder.decodeIntegerForKey(${v.name})
+    ${v.name} = coder.decodeIntegerForKey("${v.name}")
 % elif v.typename == 'Float':
-    ${v.name} = coder.decodeFloatForKey(${v.name})
+    ${v.name} = coder.decodeFloatForKey("${v.name}")
 % else:
-    if let ${v.name} = coder.decodeObjectForKey(${v.name}) as? ${v.typename} {
+    if let ${v.name} = coder.decodeObjectForKey("${v.name}") as? ${v.typename} {
         self.${v.name} = ${v.name}
     } else {
         self.${v.name} = ${v.typename}()  // FIXME: set default value
@@ -987,7 +987,6 @@ public func encodeWithCoder(coder: NSCoder) {
 }
 ''')
         return indent(template.render(clazz=swiftClass))
-
 
 class Printable():
     def protocolClass(self, swiftClass): return ['CustomStringConvertible']
@@ -1237,6 +1236,22 @@ def getDeclarations(ls, n, tokens):
     else:
         return ls
 
+def getImports(filepath):
+    r = []
+    im = False
+    for t in getTokenList(filepath):
+        if t.tokenType == 'source.lang.swift.syntaxtype.keyword':
+            if t.content == 'import':
+                im = True
+            else:
+                break
+        if t.tokenType == 'source.lang.swift.syntaxtype.identifier':
+            if im == True:
+                r.append(t.content.strip())
+            else:
+                break
+    return r
+
 def execute():
     args = parseArgs()
     checkOutputDir(args.output_dir)
@@ -1261,7 +1276,9 @@ def execute():
 
             out.write('// This file was auto-generated from %s with %s.' % (filename, PROGRAM_NAME))
             out.write('\n\n')
-            out.write('import Foundation')
+            #out.write('import Foundation')
+            for i in getImports(filepath):
+                out.write('import ' + i + '\n')
             out.write('\n\n')
             map(lambda e: out.write(e.getDeclarationString(protocols) + '\n\n'), decls)
 
