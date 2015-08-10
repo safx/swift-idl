@@ -329,7 +329,7 @@ ${s}
 ''')
         ps = getIdlProtocols(protocols, self._inheritedTypes, 'EnumDefault')
         rawType = self.rawType
-        typeInheritances = sum([e.protocolEnum for e in ps], [rawType] if rawType != None else [])
+        typeInheritances = sum([e.protocolEnum for e in ps], getNonIdlProtocols(protocols, self._inheritedTypes))
 
         output = template.render(enum=self,
                                  rs=filter(lambda e: e != None, map(lambda e: e.processEnum(self), ps)),
@@ -382,7 +382,7 @@ ${s}
 }
 ''')
         ps = getIdlProtocols(protocols, self._inheritedTypes, 'ClassDefault')
-        typeInheritances = sum([e.protocolClass(self) for e in ps], [])
+        typeInheritances = sum([e.protocolClass(self) for e in ps], getNonIdlProtocols(protocols, self._inheritedTypes))
 
         output = template.render(clazz=self,
                                  rs=[e.processClass(self) for e in ps],
@@ -711,13 +711,13 @@ class SwiftProtocol():
     def clazz(self): return self._clazz
 
 
-def getIdlProtocols(protocols, typenames, default_protocols):
-    def getIdlProtocolByName(protocols, name):
-        for p in protocols:
-            if p.name == name:
-                return p.clazz
-        return None
+def getIdlProtocolByName(protocols, name):
+    for p in protocols:
+        if p.name == name:
+            return p.clazz
+    return None
 
+def getIdlProtocols(protocols, typenames, default_protocols):
     def getIdlProtocolsByNames(protocols, names):
         ret = []
         for n in names:
@@ -735,7 +735,11 @@ def getIdlProtocols(protocols, typenames, default_protocols):
     ps = getIdlProtocolsByNames(protocols, typenames)
     if len(ps) == 0:
         ps = getDefaultIdlProtocol(protocols, default_protocols)
+
     return ps
+
+def getNonIdlProtocols(protocols, typenames):
+    return [n for n in typenames if getIdlProtocolByName(protocols, n) == None]
 
 ### Render functions
 
@@ -1126,6 +1130,7 @@ class APIKitHelper():
     def protocolClass(self, swiftClass):
         # add typealias Response
         if len([e for e in swiftClass.typealiases if e.name == 'Response']) == 0:
+            # FIXME: set other location
             swiftClass.typealiases.append(SwiftTypealias('Response', swiftClass.name + 'Response'))
 
         return ['APIKitRequest']
@@ -1219,8 +1224,8 @@ def gatherIDLProtocol(structure):
         idl_clazz = globals().get(name, None)
         if idl_clazz:
             protocols.append(visitProtocol(node, idl_clazz))
-        else:
-            print("Warning: protocol '%s' can not be processed." % name)
+        #else:
+        #    print("Warning: protocol '%s' can not be processed." % name)
 
     return protocols
 
@@ -1236,9 +1241,10 @@ def execute():
     args = parseArgs()
     checkOutputDir(args.output_dir)
     structure = sourcekittenDoc(args.project, args.scheme)
-    protocols = gatherIDLProtocol(structure)
-
     decls_map = processProject(getDeclarations, structure)
+
+    #classes = sum(decls_map.values(), [])
+    protocols = gatherIDLProtocol(structure)
 
     for filepath, decls in decls_map.items():
         if len(decls) == 0: continue
