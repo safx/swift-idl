@@ -107,9 +107,9 @@ class SampleStructTest(unittest.TestCase):
 
     def test_getOmittedTokens(self):
         tk = IDL.getOmittedTokens(test_syntax, test_source)
-        self.assertEqual(':', tk[0].content)
-        self.assertEqual(3, tk[0].line)
-        self.assertEqual('}', tk[-1].content)
+        self.assertEqual(' ', tk[0].content)
+        self.assertEqual(1, tk[0].line)
+        self.assertEqual('}\n', tk[-1].content)
         self.assertEqual(7, tk[-1].line)
 
     def test_getSwiftTokens(self):
@@ -117,9 +117,9 @@ class SampleStructTest(unittest.TestCase):
         self.assertEqual('import', tk[0].content)
         self.assertEqual(1, tk[0].line)
         self.assertEqual('source.lang.swift.syntaxtype.keyword', tk[0].tokenType)
-        self.assertEqual('}', tk[-1].content)
+        self.assertEqual('}\n', tk[-1].content)
         self.assertEqual(7, tk[-1].line)
-        self.assertEqual('omittedsymbol', tk[-1].tokenType)
+        self.assertEqual('omittedtoken', tk[-1].tokenType)
 
 if __name__ == '__main__':
     unittest.main()

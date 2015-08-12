@@ -62,7 +62,8 @@ def getOmittedTokens(tokens, source):
 
     def append_if_not_empty(prev_offset, offset):
         s = source[prev_offset : offset]
-        omitted.append(SwiftToken(get_linenumber(prev_offset), prev_offset, "omittedtoken", s))
+        if len(s) > 0:
+            omitted.append(SwiftToken(get_linenumber(prev_offset), prev_offset, "omittedtoken", s))
 
     def process_token(tk):
         offset = tk['offset']
