@@ -310,7 +310,7 @@ class SwiftEnum(object):
     def annotation(self, name):
         return getAnnotationMap()[name](self)
 
-    def getDeclarationString(self, protocols, level = 0):
+    def getDeclarationString(self, protocols, isRootLevel = True):
         template = Template('''
 public enum ${enum.name}${inh} {
     % for c in enum._cases:
@@ -335,8 +335,8 @@ ${s}
         output = template.render(enum=self,
                                  rs=filter(lambda e: e != None, map(lambda e: e.processEnum(self), ps)),
                                  inh=': ' + ', '.join(typeInheritances) if len(typeInheritances) > 0 else '',
-                                 sub=map(lambda e: e.getDeclarationString(protocols, level + 1), self._substructure))
-        return indent(output, level * 4)
+                                 sub=map(lambda e: e.getDeclarationString(protocols, False), self._substructure))
+        return indent(output, isRootLevel)
 
 class SwiftClass(SwiftVariableList):
     def __init__(self, name, decltype, variables, inheritedTypes, typealiases, annotations, substructure):
@@ -361,7 +361,7 @@ class SwiftClass(SwiftVariableList):
     @property
     def static(self): return 'static' if self._decltype == 'struct' else 'class'
 
-    def getDeclarationString(self, protocols, level=0):
+    def getDeclarationString(self, protocols, isRootLevel = True):
         template = Template('''
 public ${clazz.decltype} ${clazz.name}${inh} {
     % for a in clazz.typealiases:
@@ -388,8 +388,8 @@ ${s}
         output = template.render(clazz=self,
                                  rs=[e.processClass(self) for e in ps],
                                  inh=': ' + ', '.join(typeInheritances) if len(typeInheritances) > 0 else '',
-                                 sub=map(lambda e: e.getDeclarationString(protocols, level + 1), self._substructure))
-        return indent(output, level * 4)
+                                 sub=map(lambda e: e.getDeclarationString(protocols, False), self._substructure))
+        return indent(output, isRootLevel)
 
 
 ### Parsing functions
@@ -744,9 +744,9 @@ def getNonIdlProtocols(protocols, typenames):
 
 ### Render functions
 
-def indent(text, width=4):
-    lines = [' ' * width + t for t in text.split('\n') if len(t.strip()) > 0]
-    if width == 0: lines = [t if t.strip() != '//' else '' for t in lines]
+def indent(text, isRootLevel=False):
+    lines = [('' if isRootLevel else '\t') + t.replace(' ' * 4, '\t') for t in text.split('\n') if len(t.strip()) > 0]
+    if isRootLevel: lines = [t if t.strip() != '//' else '' for t in lines]
     return '\n'.join(lines)
 
 ### Render Class (IDL protocols)
@@ -777,7 +777,7 @@ class JSONDecodable():
         template = Template('''
 public ${clazz.static} func parseJSON(data: AnyObject) throws -> ${clazz.name} {
     if !(data is NSDictionary) {
-        throw JSONDecodeError.TypeMismatch(key: "${clazz.name}", type: "NSDictionary")
+        throw JSONDecodeError.TypeMismatch(key: "(${clazz.name})", type: "NSDictionary")
     }
     % for v in clazz.variables:
     <%
