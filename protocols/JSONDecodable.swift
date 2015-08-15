@@ -107,6 +107,15 @@ extension Float: JSONDecodable {
     }
 }
 
+extension Double: JSONDecodable {
+    public static func parseJSON(data: AnyObject) throws -> Double {
+        if let v = data as? NSNumber {
+            return v.doubleValue
+        }
+        throw JSONDecodeError.ValueTranslationFailed(type: "Double")
+    }
+}
+
 extension Int: JSONDecodable {
     public static func parseJSON(data: AnyObject) throws -> Int {
         if let v = data as? NSNumber {
