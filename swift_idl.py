@@ -557,23 +557,22 @@ def visitTypealias(tokens):
     assert(tokens[1].tokenType == 'omittedtoken')
 
     label = None
-    typeident_base = None
+    typeident_base = ''
     before = ''
-    after = ''
     for t in tokens[2:]:
         if t.tokenType == 'source.lang.swift.syntaxtype.identifier':
             assert(label == None)
             label = t.content
         elif t.tokenType == 'source.lang.swift.syntaxtype.typeidentifier':
-            typeident_base = t.content
+            typeident_base += t.content
         elif t.tokenType == 'omittedtoken':
             # FIXME: This code would parse incorrectly in some cases.
-            if typeident_base != None:
-                after = re.sub(r'[\n{].+', '', t.content)
+            if typeident_base != '':
+                typeident_base += re.sub(r'[\n{].+', '', t.content)
             elif label != None:
                 before = re.sub(r'.+=\s+', '', t.content)
 
-    typeident = before + typeident_base + after
+    typeident = before + typeident_base
     return SwiftTypealias(label, typeident)
 
 def getTokenForDecl(tokens, offset, length):
