@@ -1128,9 +1128,9 @@ class APIKitHelper():
 
     def protocolClass(self, swiftClass):
         # add typealias Response
-        if len([e for e in swiftClass.typealiases if e.name == 'Response']) == 0:
+        if len([e for e in swiftClass.typealiases if e.name == 'APIKitResponse']) == 0:
             # FIXME: set other location
-            swiftClass.typealiases.append(SwiftTypealias('Response', swiftClass.name + 'Response'))
+            swiftClass.typealiases.append(SwiftTypealias('APIKitResponse', swiftClass.name + 'Response'))
         return []
 
     def processClass(self, swiftClass):
