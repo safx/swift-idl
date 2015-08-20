@@ -1,20 +1,20 @@
 # Swift-IDL
 
-Swift-IDL generates Swift source code from Swift.
+Swift-IDL generates Swift source from Swift source.
 
-Swift-IDL can generate functions or computed properties to add *peseudo* protocols as follows:
-
-Available protocols is declared in IDLProtocols.swift.
+Swift-IDL can generate Swift source code adding some functionality from inherited *peseudo* protocols as follows:
 
 * JSONEncodable
 * JSONDecodable
-* URLRequestHelper
 * ClassInit
-* Printable
-* APIKitHelper
+* Printable (generates `CustomStringConvertible`)
+* URLRequestHelper
+* APIKitHelper (for [APIKit](https://github.com/ishkawa/APIKit))
 * EJDB
 * EnumStaticInit (WIP, maybe dropped)
 * NSCoding (WIP, maybe dropped)
+
+All available protocols are declared in IDLProtocols.swift.
 
 ## Requirements
 
@@ -56,11 +56,44 @@ optional arguments:
 
 ### JSONDecodable
 
-You can customize output by using annotatin 'json'.
+```swift
+struct User: JSONDecodable {
+    let id: String      // json:"ID"
+    let name: String
+    let isAdmin: Bool   // json:"is_admin"
+    let isChanged: Bool // json:"-"
+}
+```
+
+You can customize output by using annotation 'json'.
+
+`JSONDecodable` is a protocol:
+
+```swift
+public protocol JSONDecodable {
+    static func parseJSON(data: AnyObject) throws -> Self
+}
+```
+
+You can customize decoding to declare extension for some type.
+```swift
+extension NSDate: JSONDecodable {
+    public static func parseJSON(data: AnyObject) throws -> NSDate {
+        if let v = data as? String {
+            let dateFormatter = NSDateFormatter()
+            dateFormatter.dateFormat = "yyyy/MM/dd hh:mm"
+            if let newDate = dateFormatter.dateFromString(v) {
+                return newDate
+            }
+        }
+        throw JSONDecodeError.ValueTranslationFailed(type: "NSDate")
+    }
+}
+```
 
 ### JSONEncodable
 
-You can customize output by using annotatin 'json'.
+You can customize output by using annotation 'json'.
 
 ### APIKitHelper
 
@@ -72,7 +105,10 @@ class CreateTalk: ClassInit, APIKitHelper, MyRequest { // router:"POST,topics/\(
 }
 ```
 
-You can add custom Request class e.g., MyRequest, for your customizing point.
+You can specify `Response` by using `typealias` for API response type.
+If `typealias Response` is not declared, `typealias Response = <ClassName>Response` is inserted.
+
+You can add custom `Request` protocol e.g., `MyRequest`, for your customizing point.
 
 ### URLRequestHelper
 
@@ -89,16 +125,16 @@ enum Router: URLRequestHelper {
 We can customize output code to add annotations as formatted comment in member variables or cases.
 
 ```swift
-public struct Blog: JSONDecodable {
-    public let title      : String
-    public let authorName : String       // JSON:"author-name"
-    public let homepageURL: NSURL?       // JSON:"homepage-url"
-    public let faviconURL : NSURL?       // JSON:"favicon-url"
-    public let updated    : Bool = false // JSON:"-"
+struct Blog: JSONDecodable {
+    let title      : String
+    let authorName : String       // JSON:"author-name"
+    let homepageURL: NSURL?       // JSON:"homepage-url"
+    let faviconURL : NSURL?       // JSON:"favicon-url"
+    let updated    : Bool = false // JSON:"-"
 }
 ```
 
-### [enum][class] `json`
+### `json`
 
 `json` annotation is basically same as in Go-lang.
 
@@ -107,15 +143,14 @@ public struct Blog: JSONDecodable {
 ```
 
 * Name: field name for JSON object. Variable name is used when name is omitted or empty string.
-        For special case, if `Name` is `-`, this variable is ignored for encoding and decoding.
+        As special case, if `Name` is `-`, this variable is ignored for encoding and decoding.
 
-### [enum] `router`
+### `router`
 
 ```swift
-// router:"<Method>,<Path>,<ResponseType>"
+// router:"<Method>,<Path>"
 ```
 
 * `Method`: HTTP Method for the request like `GET` or `POST`. `GET` is used when `Method` is omitted or empty string.
-    (default: `GET`)
-* `Path`: path of the request URL. Case name or class name is used when `Path` is omitted or empty string.
-* `Response`: response type of the request. Case name or class name appending `Response` is used when `Resonse` is omitted or empty string.
+* `Path`: path of the request URL. The name of case or class is used when `Path` is omitted or empty string.
+  If you want to represent a path with parameters, you can use the notation like string interpolation such like `\(myParam)`.
