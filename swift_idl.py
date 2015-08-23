@@ -313,7 +313,7 @@ class SwiftEnum(object):
     def getDeclarationString(self, protocols, isRootLevel = True):
         template = Template('''
 public enum ${enum.name}${inh} {
-    % for c in enum._cases:
+    % for c in enum.cases:
     case ${c.declaredString}
     % endfor
 
@@ -637,15 +637,20 @@ def visitSubstructure(func, tokens, sublist, initial_list):
 class JSONAnnotation:
     def __init__(self, var):
         anon_dic = var.annotations
-        self.jsonOmitValue = False
+        self.isOmitValue = False
         self.jsonLabel = var.name
 
         annons = anon_dic.get('json', [''])
-        if annons[0] != '':
-            if annons[0] == '-':
-                self.jsonOmitValue = True
+
+        if len(annons) == 0:
+            return
+
+        name = annons[0]
+        if name != '':
+            if name == '-':
+                self.isOmitValue = True
             else:
-                self.jsonLabel = annons[0]
+                self.jsonLabel = name
 
         for i in annons[1:]:
             if i == 'omitempty':
@@ -694,10 +699,30 @@ class RouterAnnotation:
         diff = set(params).difference(set(pathParams))
         lets = [i if i in diff else None for i in params]
 
+class WSAnnotation:
+    def __init__(self, case_or_class):
+        self._variables = case_or_class.variables
+        self.name = case_or_class.name
+        self.typename = case_or_class.name + 'Event'
+        self.isOmitValue = False
+
+        annons = case_or_class.annotations.get('ws', [''])
+
+        if len(annons) > 0:
+            name = annons[0]
+            if name == '-':
+                self.isOmitValue = True
+            elif name != '':
+                self.name = name
+
+        if len(annons) > 1:
+            self.typename = annons[1]
+
 def getAnnotationMap():
     return {
         'json'  : JSONAnnotation,
-        'router': RouterAnnotation
+        'router': RouterAnnotation,
+        'ws'    : WSAnnotation
     }
 
 ### Protocols class and functions
@@ -790,7 +815,7 @@ public ${clazz.static} func parseJSON(data: AnyObject) throws -> ${clazz.name} {
         parse = 'parseJSONArrayForNullable' if v.isArrayOfOptional else 'parseJSONArray'
     %>
     //
-    % if not an.jsonOmitValue:
+    % if not an.isOmitValue:
     let ${v.name}: ${v.typename}
     if let v: AnyObject = data["${an.jsonLabel}"] {
         if v is NSNull {
@@ -822,7 +847,7 @@ public ${clazz.static} func parseJSON(data: AnyObject) throws -> ${clazz.name} {
     % endif
     % endfor
     //
-    <% jsonInits = ', '.join([v.name + ': ' + v.name for v in clazz.variables if not v.annotation('json').jsonOmitValue]) %>
+    <% jsonInits = ', '.join([v.name + ': ' + v.name for v in clazz.variables if not v.annotation('json').isOmitValue]) %>
     return ${clazz.name}(${jsonInits})
 }
 ''')
@@ -836,7 +861,7 @@ public static func parseJSON(data: AnyObject) throws -> ${enum.name} {
         return val
     }
 % else:
-% for case in enum._cases:
+% for case in enum.cases:
     if let obj: AnyObject = data["${case._label}"] {
         % for v in case.variables:
         let ${v.name}: ${v.typename}
@@ -874,7 +899,7 @@ public func toJSON() -> [String: AnyObject] {
     return [
     % for v in clazz.variables:
     <% an = v.annotation('json') %>
-    % if an.jsonOmitValue:
+    % if an.isOmitValue:
         <%doc>nohting</%doc>
     % elif v.isArray:
         <% z = '(' + v.name + ' ?? [])' if v.isOptional else v.name %>
@@ -907,7 +932,7 @@ public ${clazz.static} func parseBSON(iter: BSONIterater) throws -> ${clazz.name
         an = v.annotation('json')
         parse = 'parseBSONArrayForNullable' if v.isArrayOfOptional else 'parseBSONArray'
     %>
-    % if not an.jsonOmitValue:
+    % if not an.isOmitValue:
     let ${v.name}: ${v.typename}
     do {
         let type = itor.find("${an.jsonLabel}")
@@ -935,7 +960,7 @@ public ${clazz.static} func parseBSON(iter: BSONIterater) throws -> ${clazz.name
     % endif
     //
     % endfor
-    <% jsonInits = ', '.join([v.name + ': ' + v.name for v in clazz.variables if not v.annotation('json').jsonOmitValue]) %>
+    <% jsonInits = ', '.join([v.name + ': ' + v.name for v in clazz.variables if not v.annotation('json').isOmitValue]) %>
     return ${clazz.name}(${jsonInits})
 }
 ''')
@@ -1017,7 +1042,7 @@ public var description: String {
         template = Template('''
 public var description: String {
     switch self {
-    % for case in enum._cases:
+    % for case in enum.cases:
     <%
         av  = ['%s=\(%s)' % (v.name, v.name) if v.name else '\(%s)' % v.varname for v in case.variables]
         out = '(' + ', '.join(av) + ')' if len(av) else ''
@@ -1036,7 +1061,7 @@ class EnumStaticInit():
             return None # FIXME
         else:
             template = Template('''
-% for case in enum._cases:
+% for case in enum.cases:
 <%
     ais = map(lambda x: '%s: %s = %s()' % (x._name, x.typename, x.typename) if x._name else 'arg%d: %s = %s()' % (x._positon, x.typename, x.typename), case.variables)
     cis = map(lambda x: '%s: %s' % (x._name, x._name) if x._name else 'arg%d' % x._positon, case.variables)
@@ -1059,7 +1084,7 @@ class URLRequestHelper():
             template = Template('''
 public var method: String {
     switch self {
-    % for case in enum._cases:
+    % for case in enum.cases:
     <% an = case.annotation('router') %>
     case .${case._label}: return "${an.method}"
     % endfor
@@ -1068,7 +1093,7 @@ public var method: String {
 //
 public var path: String {
     switch self {
-    % for case in enum._cases:
+    % for case in enum.cases:
     <% an = case.annotation('router') %>
     case .${case._label}${an.casePathString}: return "${an.path}"
     % endfor
@@ -1077,7 +1102,7 @@ public var path: String {
 //
 public var params: [String: AnyObject] {
     switch self {
-    % for case in enum._cases:
+    % for case in enum.cases:
     <%
         def toJsonString(info):
              if info._isArray: return info._name + '.map { $0.toJSON() }'
@@ -1168,6 +1193,33 @@ public var parameters: [String: AnyObject] {
 }
 ''')
         return indent(template.render(clazz=swiftClass))
+
+
+class WSHelper():
+    def modifyEnum(self, swiftEnum):
+        for c in swiftEnum.cases:
+            anon = c.annotation('ws')
+            if len(c.variables) == 0 and not anon.isOmitValue:
+                c._variables = [SwiftTupleVariable(None, anon.typename, 0)]
+
+    def processEnum(self, swiftEnum):
+        template = Template('''
+
+static func parse(type: String, data:[String:AnyObject]) throws -> ${enum.name}? {
+    % for case in enum.cases:
+    <% an = case.annotation('ws') %>
+    % if not an.isOmitValue:
+    <%
+        name = case.variables[0].typename
+    %>
+    if type == "${an.name}" { return .${case.name}(try ${name}.parseJSON(data)) }
+    % endif
+    % endfor
+    return nil // FIXME
+}
+
+''')
+        return indent(template.render(enum=swiftEnum))
 
 
 ### command line pipe lines
