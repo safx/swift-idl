@@ -1001,7 +1001,7 @@ class Printable():
     p = ", ".join(["%s=\(%s)" % (v.name, v.name) for v in clazz.variables])
 %>
 public var description: String {
-    return "${clazz.name}(${p})
+    return "${clazz.name}(${p})"
 }
 ''')
         return indent(template.render(clazz=swiftClass))
