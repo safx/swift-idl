@@ -330,7 +330,11 @@ ${s}
 ''')
         ps = getIdlProtocols(protocols, self._inheritedTypes, 'EnumDefault')
         rawType = self.rawType
-        typeInheritances = sum([e.protocolEnum for e in ps], getNonIdlProtocols(protocols, self._inheritedTypes))
+
+        for p in ps:
+            if hasattr(p, 'modifyEnum'): p.modifyEnum(self)
+
+        typeInheritances = sum([p.protocolEnum if hasattr(p, 'protocolEnum') else [] for p in ps], getNonIdlProtocols(protocols, self._inheritedTypes))
 
         output = template.render(enum=self,
                                  rs=filter(lambda e: e != None, map(lambda e: e.processEnum(self), ps)),
@@ -383,7 +387,10 @@ ${s}
 }
 ''')
         ps = getIdlProtocols(protocols, self._inheritedTypes, 'ClassDefault')
-        typeInheritances = sum([e.protocolClass(self) for e in ps], getNonIdlProtocols(protocols, self._inheritedTypes))
+        for p in ps:
+            if hasattr(p, 'modifyClass'): p.modifyClass(self)
+
+        typeInheritances = sum([p.protocolClass if hasattr(p, 'protocolClass') else [] for p in ps], getNonIdlProtocols(protocols, self._inheritedTypes))
 
         output = template.render(clazz=self,
                                  rs=[e.processClass(self) for e in ps],
@@ -751,8 +758,6 @@ def indent(text, isRootLevel=False):
 ### Render Class (IDL protocols)
 
 class ClassInit():
-    def protocolClass(self, swiftClass): return []
-
     def processClass(self, swiftClass):
         template = Template('''
 <%
@@ -767,7 +772,8 @@ public init(${p}) {
         return indent(template.render(clazz=swiftClass))
 
 class JSONDecodable():
-    def protocolClass(self, swiftClass): return ['JSONDecodable']
+    @property
+    def protocolClass(self): return ['JSONDecodable']
 
     @property
     def protocolEnum(self): return ['JSONDecodable']
@@ -859,10 +865,8 @@ public static func parseJSON(data: AnyObject) throws -> ${enum.name} {
 
 
 class JSONEncodable():
-    def protocolClass(self, swiftClass): return ['JSONEncodable']
-
     @property
-    def protocolEnum(self): return []
+    def protocolClass(self): return ['JSONEncodable']
 
     def processClass(self, swiftClass):
         template = Template('''
@@ -895,8 +899,6 @@ public func toJSON() -> ${enum.inheritedTypes[0]} {
         return indent(template.render(enum=swiftEnum))
 
 class EJDB():
-    def protocolClass(self, swiftClass): return []
-
     def processClass(self, swiftClass):
         template = Template('''
 public ${clazz.static} func parseBSON(iter: BSONIterater) throws -> ${clazz.name} {
@@ -947,7 +949,8 @@ class ErrorType():
 
 
 class NSCoding():
-    def protocolClass(self, swiftClass): return ['NSCoding']
+    @property
+    def protocolClass(self): return ['NSCoding']
 
     def processClass(self, swiftClass):
         template = Template('''
@@ -989,7 +992,8 @@ public func encodeWithCoder(coder: NSCoder) {
         return indent(template.render(clazz=swiftClass))
 
 class Printable():
-    def protocolClass(self, swiftClass): return ['CustomStringConvertible']
+    @property
+    def protocolClass(self): return ['CustomStringConvertible']
 
     @property
     def protocolEnum(self): return ['CustomStringConvertible']
@@ -1027,9 +1031,6 @@ public var description: String {
 
 
 class EnumStaticInit():
-    @property
-    def protocolEnum(self): return []
-
     def processEnum(self, swiftEnum):
         if swiftEnum.isRawType:
             return None # FIXME
@@ -1051,9 +1052,6 @@ public static func make${case._label}(${params}) -> ${enum.name} {
 
 
 class URLRequestHelper():
-    @property
-    def protocolEnum(self): return []
-
     def processEnum(self, swiftEnum):
         if swiftEnum.isRawType:
             return None # FIXME
@@ -1120,18 +1118,10 @@ public var params: [String: AnyObject] {
 
 
 class APIKitHelper():
-    @property
-    def protocolEnum(self): return []
-
-    def processEnum(self, swiftClass):
-        return None
-
-    def protocolClass(self, swiftClass):
+    def modifyClass(self, swiftClass):
         # add typealias Response
         if len([e for e in swiftClass.typealiases if e.name == 'APIKitResponse']) == 0:
-            # FIXME: set other location
             swiftClass.typealiases.append(SwiftTypealias('APIKitResponse', swiftClass.name + 'Response'))
-        return []
 
     def processClass(self, swiftClass):
         template = Template('''
