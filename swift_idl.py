@@ -1175,10 +1175,11 @@ public var parameters: [String: AnyObject] {
 
         dicx = [i for i in clazz.variables if i.name in diff]
 
-        inits   = ['"%s": %s' % (i.name, toJsonString(i)) for i in dicx if not i.isOptional]
+        # FIXME: use annotation('route') insteadof annotation('json')
+        inits   = ['"%s": %s' % (i.annotation('json').jsonLabel, toJsonString(i)) for i in dicx if not i.isOptional]
         initStr = ', '.join(inits) if len(inits) else ':'
 
-        params = ['%s.map { p["%s"] = $0.toJSON() }' % (i.name, i.name) for i in dicx if i.isOptional]
+        params = ['%s.map { p["%s"] = $0.toJSON() }' % (i.name, i.annotation('json').jsonLabel) for i in dicx if i.isOptional]
     %>
     % if len(diff) > 0 and len(params) > 0:
     var p: [String: AnyObject] = [${initStr}]
