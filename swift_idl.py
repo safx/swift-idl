@@ -822,14 +822,14 @@ public ${clazz.static} func parseJSON(data: AnyObject) throws -> ${clazz.name} {
         % if v.hasDefaultValue:
             ${v.name} = ${v.defaultValue}
         % else:
-            throw JSONDecodeError.NonNullablle(key: "${an.jsonLabel}")
+            throw JSONDecodeError.NonNullable(key: "${an.jsonLabel}")
         % endif
         } else {
             do {
             % if v.isArray:
                 ${v.name} = try ${v.baseTypename}.${parse}(v)
-            } catch JSONDecodeError.NonNullablle {
-                throw JSONDecodeError.NonNullablle(key: "${an.jsonLabel}")
+            } catch JSONDecodeError.NonNullable {
+                throw JSONDecodeError.NonNullable(key: "${an.jsonLabel}")
             % else:
                 ${v.name} = try ${v.baseTypename}.parseJSON(v)
             % endif
