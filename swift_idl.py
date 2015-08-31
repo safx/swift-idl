@@ -825,17 +825,11 @@ public ${clazz.static} func parseJSON(data: AnyObject) throws -> ${clazz.name} {
             throw JSONDecodeError.NonNullable(key: "${an.jsonLabel}")
         % endif
         } else {
-            do {
             % if v.isArray:
-                ${v.name} = try ${v.baseTypename}.${parse}(v)
-            } catch JSONDecodeError.NonNullable {
-                throw JSONDecodeError.NonNullable(key: "${an.jsonLabel}")
+            ${v.name} = try ${v.baseTypename}.${parse}(v)
             % else:
-                ${v.name} = try ${v.baseTypename}.parseJSON(v)
+            ${v.name} = try ${v.baseTypename}.parseJSON(v)
             % endif
-            } catch JSONDecodeError.ValueTranslationFailed {
-                throw JSONDecodeError.TypeMismatch(key: "${an.jsonLabel}", type: "${v.baseTypename}")
-            }
         }
     } else {
     % if v.hasDefaultValue:
