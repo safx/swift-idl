@@ -147,6 +147,8 @@ def parseArgs():
     parser = argparse.ArgumentParser(description='Swift source generator from JSON')
     parser.add_argument('jsonfile', type=str, nargs='?', help='json to parse')
     parser.add_argument('-c', '--classname', type=str, default=None, help='class name')
+    parser.add_argument('-p', '--parameter', type=str, default=None, help='annotation parameter')
+    parser.add_argument('-a', '--apikit', action='store_true', help='APIKit')
     return parser.parse_args()
 
 
@@ -159,8 +161,19 @@ def execute():
         name = args.classname
         if not name:
             name, ext = os.path.splitext(os.path.basename(filepath))
-        printClass(info, toCamelCase(name))
+        typename = toCamelCase(name)
 
+        if args.apikit:
+            param = args.parameter
+            if not param:
+                param = ',' + args.classname
+            print('struct %s: ClassInit, APIKitHelper, Request { // router:"%s"' % (typename, param))
+            print('	typealias APIKitResponse = %sResponse' % (typename,))
+            print('')
+            printClass(info, typename + 'Response', 1)
+            print('}')
+        else:
+            printClass(info, typename)
 
 if __name__ == '__main__':
     execute()
