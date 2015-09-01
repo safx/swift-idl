@@ -4,6 +4,7 @@ from __future__ import print_function
 
 import argparse
 import functools
+import itertools
 import json
 import os
 import re
@@ -1219,9 +1220,23 @@ static func parse(type: String, data:[String:AnyObject]) throws -> ${enum.name}?
 
 ### command line pipe lines
 
+def getXcodeVersion():
+    p = subprocess.Popen(['xcodebuild', '-version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    out, err = p.communicate()
+    vs = out.split('\n')[0].split()
+    if len(vs) > 0:
+        return float(vs[1])
+    return 0.0
+
+def getSchemes(project):
+    p = subprocess.Popen(['xcodebuild', '-list', '-project', project], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    out, err = p.communicate()
+    a = itertools.dropwhile(lambda e: e != '    Schemes:', out.split('\n'))
+    return map(str.strip, itertools.islice(a, 1, None))
+
 def execSourcekitten(args):
     p = subprocess.Popen([SOURCEKITTEN] + args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    (out, err) = p.communicate()
+    out, err = p.communicate()
     return json.loads(out)
 
 def sourcekittenDoc(project, scheme):
@@ -1232,7 +1247,7 @@ def sourcekittenSyntax(filepath):
 
 def parseArgs():
     parser = argparse.ArgumentParser(description=PROGRAM_NAME + ': Swift source generator from Swift')
-    parser.add_argument('project', type=str, nargs='?', default='IDL.xcodeproj', help='project to parse')
+    parser.add_argument('project', type=str, nargs='?', default=None, help='project to parse')
     parser.add_argument('scheme', type=str, nargs='?', default='IDL', help='sceheme to parse')
     parser.add_argument('-s', '--sourcekitten', type=str, default='sourcekitten', help='path to sourcekitten')
     parser.add_argument('-o', '--output_dir', type=str, default='out', help='directory to output')
@@ -1288,10 +1303,28 @@ def getImports(filepath):
                 break
     return r
 
+def resolveProject(proj):
+    if proj: return proj
+    for i in os.listdir('.'):
+        _, ext = os.path.splitext(i)
+        if ext == '.xcodeproj':
+            return i
+    return None
+
 def execute():
     args = parseArgs()
     checkOutputDir(args.output_dir)
-    structure = sourcekittenDoc(args.project, args.scheme)
+    project = resolveProject(args.project)
+    if not project:
+        print('Xcode project not found')
+        return
+    schemes = getSchemes(project)
+    if not args.scheme in schemes:
+        print('Scheme named "%s" is not found in project "%s"' % (args.scheme, project))
+        map(print, ['Available schemes:'] + map(lambda e: '\t' + e, schemes))
+        return
+
+    structure = sourcekittenDoc(project, args.scheme)
     decls_map = processProject(getDeclarations, structure)
 
     #classes = sum(decls_map.values(), [])
@@ -1320,4 +1353,5 @@ def execute():
 
 
 if __name__ == '__main__':
+    assert(getXcodeVersion() >= 7.0)
     execute()
