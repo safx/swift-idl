@@ -7,8 +7,9 @@ import functools
 import itertools
 import json
 import os
-import re
 import subprocess
+import sys
+import re
 
 
 ST_NONE   = 1
@@ -62,7 +63,7 @@ def toCamelCase(name, convertFirstLetter=True):
         if len(s) == 0: return s
         return s[0].upper() + s[1:]
 
-    ts = re.split('[-_]', name)
+    ts = re.split('[-_/]', name)
     ret = ''.join([c(e) for e in ts])
     return ret if convertFirstLetter else name[0].lower() + ret[1:]
 
@@ -145,35 +146,44 @@ def printClass(info, name, level = 0):
 
 def parseArgs():
     parser = argparse.ArgumentParser(description='Swift source generator from JSON')
-    parser.add_argument('jsonfile', type=str, nargs='?', help='json to parse')
+    parser.add_argument('jsonfile', type=argparse.FileType('r'), nargs='?', help='json to parse', default=sys.stdin)
     parser.add_argument('-c', '--classname', type=str, default=None, help='class name')
     parser.add_argument('-p', '--parameter', type=str, default=None, help='annotation parameter')
     parser.add_argument('-a', '--apikit', action='store_true', help='APIKit')
     return parser.parse_args()
 
 
+def resolveStructName(args):
+    cname = args.classname
+    if cname:
+        return toCamelCase(cname)
+
+    name = args.jsonfile.name
+    if name == '<stdin>':
+        return '<# ClassName #>'
+    name, ext = os.path.splitext(os.path.basename(name))
+    return toCamelCase(name)
+
+
 def execute():
     args = parseArgs()
-    filepath = args.jsonfile
-    with file(filepath) as f:
-        obj = json.loads(f.read())
-        info = gatherInfoJSONObject(obj)
-        name = args.classname
-        if not name:
-            name, ext = os.path.splitext(os.path.basename(filepath))
-        typename = toCamelCase(name)
+    obj = json.loads(args.jsonfile.read())
+    args.jsonfile.close()
 
-        if args.apikit:
-            param = args.parameter
-            if not param:
-                param = ',' + args.classname
-            print('struct %s: ClassInit, APIKitHelper, Request { // router:"%s"' % (typename, param))
-            print('	typealias APIKitResponse = %sResponse' % (typename,))
-            print('')
-            printClass(info, typename + 'Response', 1)
-            print('}')
-        else:
-            printClass(info, typename)
+    info = gatherInfoJSONObject(obj)
+    typename = resolveStructName(args)
+
+    if args.apikit:
+        param = args.parameter
+        if not param:
+            param = ',' + (args.classname or typename)
+        print('struct %s: ClassInit, APIKitHelper, Request { // router:"%s"' % (typename, param))
+        print('	typealias APIKitResponse = %sResponse' % (typename,))
+        print('')
+        printClass(info, typename + 'Response', 1)
+        print('}')
+    else:
+        printClass(info, typename)
 
 if __name__ == '__main__':
     execute()
