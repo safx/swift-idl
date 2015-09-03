@@ -808,7 +808,7 @@ class JSONDecodable():
         template = Template('''
 public ${clazz.static} func parseJSON(data: AnyObject) throws -> ${clazz.name} {
     if !(data is NSDictionary) {
-        throw JSONDecodeError.TypeMismatch(key: "(${clazz.name})", type: "NSDictionary")
+        throw JSONDecodeError.TypeMismatch(key: "(${clazz.name})", object: data, expected: NSDictionary.self, actual: data.dynamicType)
     }
     % for v in clazz.variables:
     <%
@@ -823,7 +823,7 @@ public ${clazz.static} func parseJSON(data: AnyObject) throws -> ${clazz.name} {
         % if v.hasDefaultValue:
             ${v.name} = ${v.defaultValue}
         % else:
-            throw JSONDecodeError.NonNullable(key: "${an.jsonLabel}")
+            throw JSONDecodeError.NonNullable(key: "${an.jsonLabel}", object: data)
         % endif
         } else {
             % if v.isArray:
@@ -836,7 +836,7 @@ public ${clazz.static} func parseJSON(data: AnyObject) throws -> ${clazz.name} {
     % if v.hasDefaultValue:
         ${v.name} = ${v.defaultValue}
     % else:
-        throw JSONDecodeError.MissingKey(key: "${an.jsonLabel}")
+        throw JSONDecodeError.MissingKey(key: "${an.jsonLabel}", object: data)
     % endif
     }
     % endif
@@ -867,7 +867,7 @@ public static func parseJSON(data: AnyObject) throws -> ${enum.name} {
                 throw JSONDecodeError.TypeMismatch(key: "${v.keyname}", type: "${v.typename}")
             }
         } else {
-            throw JSONDecodeError.MissingKey(key: "${v.keyname}")
+            throw JSONDecodeError.MissingKey(key: "${v.keyname}", object: obj)
         }
         % endfor
         //
@@ -878,7 +878,7 @@ public static func parseJSON(data: AnyObject) throws -> ${enum.name} {
     }
 % endfor
 % endif
-    throw JSONDecodeError.ValueTranslationFailed(type: "${enum.name}")
+    throw JSONDecodeError.ValueTranslationFailed(type: ${enum.name}.self, object: data)
 }
 ''')
         return indent(template.render(enum=swiftEnum))
@@ -936,13 +936,13 @@ public ${clazz.static} func parseBSON(iter: BSONIterater) throws -> ${clazz.name
         % if v.hasDefaultValue:
             ${v.name} = ${v.defaultValue}
         % else:
-            throw BSONDecodeError.MissingKey(key: "${an.jsonLabel}")
+            throw JSONDecodeError.MissingKey(key: "${an.jsonLabel}", object: data)
         % endif
         } else if type == BSON_NULL {
         % if v.hasDefaultValue:
             ${v.name} = ${v.defaultValue}
         % else:
-            throw JSONDecodeError.TypeMismatch(key: "${an.jsonLabel}", type: "${v.baseTypename}")
+            throw JSONDecodeError.MissingKey(key: "${an.jsonLabel}", object: data)
         % endif
         } else {
         % if v.isArray:
