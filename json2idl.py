@@ -94,7 +94,7 @@ def guessTypenameFromSet(ts):
     isOptional = ST_NONE in ts
     if isOptional:
         ts.remove(ST_NONE)
-        if len(ts) == 0: return '<# Unknown #>'
+        if len(ts) == 0: return '<# AnyObject #>'
 
     typemap = {
         ST_BOOL: 'Bool',
@@ -114,7 +114,7 @@ def guessTypenameFromSet(ts):
             s = ST_ANYOBJECT
 
     ret = typemap.get(s, None)
-    if ret == None: return '<# Unknown #>'
+    if ret == None: return '<# AnyObject #>'
     return ret + ('?' if isOptional else '')
 
 
