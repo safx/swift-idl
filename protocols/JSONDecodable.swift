@@ -71,7 +71,7 @@ extension NSDate: JSONDecodable {
                 return newDate
             }
         }
-        throw JSONDecodeError.ValueTranslationFailed(type: "NSDate")
+        throw JSONDecodeError.ValueTranslationFailed(type: NSDate.self, object: data)
     }
 }
 

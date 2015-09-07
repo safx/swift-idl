@@ -25,6 +25,7 @@ All available protocols are declared in IDLProtocols.swift.
 ## Up and Running
 
 1. Create target, e.g., "IDL", which can omit some options in command line later, by choosing "Command Line Tool" to your project in Xcode.
+        ![](Documents/xcode_idl.png)
 1. Add scheme, e.g., "IDL". If you add target in Xcode, this step could be skipped.
 1. Add Empty Swift file, which add target to "IDL"
 1. `python swift-idl.py -o Source/gen YourProject.xcodeproj -f`
@@ -154,3 +155,21 @@ struct Blog: JSONDecodable {
 * `Method`: HTTP Method for the request like `GET` or `POST`. `GET` is used when `Method` is omitted or empty string.
 * `Path`: path of the request URL. The name of case or class is used when `Path` is omitted or empty string.
   If you want to represent a path with parameters, you can use the notation like string interpolation such like `\(myParam)`.
+
+
+## json2idl.py
+
+If you'll want to use `APIKitHelper` or `JSONDecodable`, `json2idl.py` will help your work.
+It creates `struct` from JSON input.
+
+The following example creates APIKit's `Request` from a response of the GitHub Web API.
+
+```bash
+curl 'https://api.example.com/some/api' | json2idl.py -a -c some-API  >> IDL/SomeAPI.swift
+```
+
+![](Documents/json2idl.gif)
+
+You should modify some keywords whose types are not determined.
+You also modify or comment out some keywords like `private` since `swift-idl` can't process properties of Swift's resorved words currently.
+If you'll use this command with option `-a` (APIKet), you should add properties for this request.
