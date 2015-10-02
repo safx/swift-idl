@@ -59,14 +59,9 @@ def gatherInfoJSONObject(json):
 
 
 def toCamelCase(name, convertFirstLetter=True):
-    def c(s):
-        if len(s) == 0: return s
-        return s[0].upper() + s[1:]
-
     ts = re.split('[-_/]', name)
-    ret = ''.join([c(e) for e in ts])
+    ret = ''.join([e.capitalize() for e in ts])
     return ret if convertFirstLetter else name[0].lower() + ret[1:]
-
 
 
 def guessTypename(v):
