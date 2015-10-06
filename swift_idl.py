@@ -229,9 +229,10 @@ class SwiftVariable(SwiftVariableBase):
 
     @property
     def parsedDeclarationWithoutDefaultValue(self):
-        # FIXME: remove default value only
-        s = self._parsedDeclaration.split('=')
-        return 'public ' + s[0].strip()
+        # FIXME: use original code: self._parsedDeclaration
+        anon = ' '.join([k + ':"' + ','.join(v) + '"' for k,v in self._annotations.iteritems()]).strip()
+        if len(anon) > 0: anon = ' // ' + anon
+        return 'public let ' + self._name + ': ' + self._typename + anon
 
     def annotation(self, name):
         return getAnnotationMap()[name](self)
@@ -443,10 +444,10 @@ def visitClass(node, tokens):
     name = node['key.name']
     decltype = 'struct' if node['key.kind'] == 'source.lang.swift.decl.struct' else 'class'
 
-    variables = reduce(getVariables, node['key.substructure'], [])
+    variables = reduce(getVariables, node.get('key.substructure', []), [])
     inheritedTypes = map(lambda e: e['key.name'], node.get('key.inheritedtypes', []))
 
-    annotations = getAnnotations([tokens[i] for i in tokenrange(tokens, node['key.offset'], node['key.length'])])
+    annotations = getAnnotations([tokens[i] for i in tokenrange(tokens, node['key.bodyoffset'], node['key.bodylength'])])
     typealiases = getTypealiases()
 
     innerDecls = []
@@ -498,23 +499,21 @@ def visitVariable(node, tokens):
             return t.content.split('\n')[0].split('}')[0]
         return t.content
 
-    def getDefaultValue():
-        tkrange = tokenrange(tokens, offset, length)
-        var_tokens = [tokens[i] for i in tkrange]
+    def getDefaultValue(var_tokens):
         eqs = [e[0] for e in enumerate(var_tokens) if e[1].tokenType == 'omittedtoken' and e[1].content.find('=') >= 0]
         assert(len(eqs) <= 1)
         if len(eqs) == 1:
             p = eqs[0]
             before = var_tokens[p].content.split('=')[1].split('\n')[0].split('}')[0].strip()
-            assign_tokens = var_tokens[p+1:]
+            assign_tokens = [i for i in var_tokens[p+1:] if i.tokenType != 'source.lang.swift.syntaxtype.comment']
             value = before + ''.join([getContent(e) for e in assign_tokens]).strip()
             return value if len(value) > 0 else None
         return None
 
     name          = node['key.name']
     typename      = node['key.typename']
-    defaultValue  = getDefaultValue()
     decl_tokens   = getTokenForDecl(tokens, offset, length)
+    defaultValue  = getDefaultValue(decl_tokens)
     accessibility = None # FIXME
     parsedDecl    = ''.join([getContent(i) for i in decl_tokens]).strip() # FIXME: unused
     annotations   = getAnnotations(decl_tokens)
@@ -615,7 +614,7 @@ def getTokenList(filepath):
 
 def processProject(func, structure):
     def visit(filepath, contents):
-        sublist = contents.get('key.substructure', None)
+        sublist = contents.get('key.substructure', [])
         tokens = getTokenList(filepath)
 
         tmp_list = []
@@ -1225,8 +1224,8 @@ def getXcodeVersion():
     out, err = p.communicate()
     vs = out.split('\n')[0].split()
     if len(vs) > 0:
-        return float(vs[1])
-    return 0.0
+        return vs[1]
+    return None
 
 def getSchemes(project):
     p = subprocess.Popen(['xcodebuild', '-list', '-project', project], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -1353,5 +1352,5 @@ def execute():
 
 
 if __name__ == '__main__':
-    assert(getXcodeVersion() >= 7.0)
+    assert(int(getXcodeVersion().split('.')[0]) >= 7)
     execute()
