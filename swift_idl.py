@@ -458,33 +458,17 @@ def visitClass(node, tokens):
     return SwiftClass(name, decltype, variables, inheritedTypes, typealiases, annotations, innerDecls)
 
 def visitEnum(node, tokens):
-    def getCases(tokens, offset, length):
-        cases = []
-        begin = None
-        for i in tokenrange(tokens, offset, length):
-            p = tokens[i - 1]
-            t = tokens[i]
-            if t.tokenType == 'source.lang.swift.syntaxtype.keyword':
-                if t.content != 'case': break
-                if begin != None:
-                    cases.append(visitCase(getTokenForDecl(tokens, begin, p.offset - begin)))
-                begin = t.offset
-
-        if begin != None:
-            cases.append(visitCase(getTokenForDecl(tokens, begin, t.offset - begin + 1)))
-
-        return cases
+    def getCases(tokens, subs):
+        f = functools.partial(visitCase, tokens)
+        return [f(e) for e in subs if e['key.kind'] == 'source.lang.swift.decl.enumcase']
 
     name = node['key.name']
     inheritedTypes = map(lambda e: e['key.name'], node.get('key.inheritedtypes', []))
 
-    bodyOffset = node['key.bodyoffset']
-    bodyLength = node['key.bodylength']
-    cases = getCases(tokens, bodyOffset, bodyLength)
-
     innerDecls = []
     subs = node.get('key.substructure', None)
     if subs:
+        cases = getCases(tokens, subs)
         innerDecls = visitSubstructure(getDeclarations, tokens, subs, [])
 
     annotations = {} # FIXME
@@ -519,19 +503,23 @@ def visitVariable(node, tokens):
     annotations   = getAnnotations(decl_tokens)
     return SwiftVariable(name, typename, defaultValue, accessibility, annotations, parsedDecl)
 
-def visitCase(tokens):
+def visitCase(tokens, enumcase):
     # `sourcekitten doc` doesn't return `case` information. So we have to process.
     #   * You hove to declare `case`s at the beginning of body of enum when you'll contain sub enums, due to parsing limitation.
     #   * You cannot include tuple in case.
-    assert(tokens[0].content == 'case' and tokens[0].tokenType == 'source.lang.swift.syntaxtype.keyword')
-    assert(tokens[1].tokenType == 'omittedtoken')
+    offset = enumcase['key.offset']
+    length = enumcase['key.length']
+    caseTokens = getTokenForDecl(tokens, offset, length)
+
+    assert(caseTokens[0].content == 'case' and caseTokens[0].tokenType == 'source.lang.swift.syntaxtype.keyword')
+    assert(caseTokens[1].tokenType == 'omittedtoken')
 
     label = None
     value = None
     assocVals = []
     tuple_pair = None
     position = 0
-    for t in tokens[2:]:
+    for t in caseTokens[2:]:
         if t.tokenType == 'source.lang.swift.syntaxtype.identifier':
             if label == None:
                 label = t.content
@@ -556,7 +544,7 @@ def visitCase(tokens):
             assert(value == None)
             value = t.content # FIXME: check tokenType
 
-    annotations = getAnnotations(tokens)
+    annotations = getAnnotations(caseTokens)
     return SwiftCase(label, assocVals, annotations, value)
 
 def visitTypealias(tokens):
