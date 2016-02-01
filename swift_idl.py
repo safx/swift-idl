@@ -257,9 +257,9 @@ class SwiftVariableList(object):
         return getAnnotationMap()[name](self)
 
 class SwiftCase(SwiftVariableList):
-    def __init__(self, name, variables, annotations, value):
+    def __init__(self, name, variables, annotations, rawValue):
         super(SwiftCase, self).__init__(name, variables, annotations)
-        self._value  = value
+        self._rawValue = rawValue
 
     @property
     def letString(self):
@@ -268,8 +268,8 @@ class SwiftCase(SwiftVariableList):
 
     @property
     def declaredString(self):
-        if self._value != None:
-            return str(self._name) + ' = ' + str(self._value)
+        if self._rawValue != None:
+            return str(self._name) + ' = ' + str(self._rawValue)
         else:
             p = ''
             if len(self._variables) > 0:
@@ -450,26 +450,19 @@ def visitClass(node, tokens):
     annotations = getAnnotations([tokens[i] for i in tokenrange(tokens, node['key.bodyoffset'], node['key.bodylength'])])
     typealiases = getTypealiases()
 
-    innerDecls = []
-    subs = node.get('key.substructure', None)
-    if subs:
-        innerDecls = visitSubstructure(getDeclarations, tokens, subs, [])
+    subs = node.get('key.substructure', [])
+    innerDecls = visitSubstructure(getDeclarations, tokens, subs, [])
 
     return SwiftClass(name, decltype, variables, inheritedTypes, typealiases, annotations, innerDecls)
 
 def visitEnum(node, tokens):
-    def getCases(tokens, subs):
-        f = functools.partial(visitCase, tokens)
-        return [f(e) for e in subs if e['key.kind'] == 'source.lang.swift.decl.enumcase']
-
     name = node['key.name']
     inheritedTypes = map(lambda e: e['key.name'], node.get('key.inheritedtypes', []))
 
-    innerDecls = []
-    subs = node.get('key.substructure', None)
-    if subs:
-        cases = getCases(tokens, subs)
-        innerDecls = visitSubstructure(getDeclarations, tokens, subs, [])
+    subs = node.get('key.substructure', [])
+    pred = lambda e: e['key.kind'] == 'source.lang.swift.decl.enumcase'
+    cases = map(functools.partial(visitCase, tokens), filter(pred, subs))
+    innerDecls = visitSubstructure(getDeclarations, tokens, itertools.ifilterfalse(pred, subs), [])
 
     annotations = {} # FIXME
     return SwiftEnum(name, cases, inheritedTypes, annotations, innerDecls)
@@ -514,11 +507,18 @@ def visitCase(tokens, enumcase):
     assert(caseTokens[0].content == 'case' and caseTokens[0].tokenType == 'source.lang.swift.syntaxtype.keyword')
     assert(caseTokens[1].tokenType == 'omittedtoken')
 
+    assocVals = []
+    def addAssociateValue(valuePair, token):
+        value, typename = tuple_pair
+        if token.content.find('?') >= 0:
+            typename += '?'
+        if token.content.find(']') >= 0:
+            typename = '[' + typename + ']'
+        assocVals.append(SwiftTupleVariable(tuple_pair[0], typename, len(assocVals)))
+
     label = None
     value = None
-    assocVals = []
     tuple_pair = None
-    position = 0
     for t in caseTokens[2:]:
         if t.tokenType == 'source.lang.swift.syntaxtype.identifier':
             if label == None:
@@ -531,12 +531,7 @@ def visitCase(tokens, enumcase):
         elif t.tokenType == 'omittedtoken':
             # FIXME: This code would parse incorrectly in some cases.
             if t.content.find(',') >= 0 or t.content.find(')') >= 0:
-                typename = tuple_pair[1]
-                if t.content.find('?') >= 0:
-                    typename += '?'
-                if t.content.find(']') >= 0:
-                    typename = '[' + typename + ']'
-                assocVals.append(SwiftTupleVariable(tuple_pair[0], typename, position))
+                addAssociateValue(tuple_pair, t)
                 tuple_pair = None
         elif t.isComment:
             pass
