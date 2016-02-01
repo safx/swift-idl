@@ -413,26 +413,26 @@ def visitClass(node, tokens):
     #   * You must to declare typealias at the beginning of body in class.
     def getTypealiases():
         aliases = []
-        begin = None
+        def addTypealias(begin, end):
+            if begin != None:
+                aliases.append(visitTypealias([tokens[x] for x in range(begin, end)]))
+
         tkrange = tokenrange(tokens, node['key.bodyoffset'], node['key.bodylength'])
+        begin = None
         for i in tkrange:
             t = tokens[i]
             if t.tokenType == 'source.lang.swift.syntaxtype.attribute.builtin':
-                if begin != None:
-                    aliases.append(visitTypealias([tokens[x] for x in range(begin, i)]))
-                    begin = None
+                addTypealias(begin, i)
+                begin = None
             if t.tokenType == 'source.lang.swift.syntaxtype.keyword':
                 if t.content == 'typealias':
-                    if begin != None:
-                        aliases.append(visitTypealias([tokens[x] for x in range(begin, i)]))
-                        begin = None
+                    addTypealias(begin, i)
                     begin = i
                 else:
-                    if begin != None:
-                        aliases.append(visitTypealias([tokens[x] for x in range(begin, i)]))
+                    addTypealias(begin, i)
                     break
-            elif i == tkrange[-1] and begin != None:
-                aliases.append(visitTypealias([tokens[x] for x in range(begin, i + 1)]))
+            elif i == tkrange[-1]:
+                addTypealias(begin, i + 1)
 
         return aliases
 
