@@ -21,8 +21,8 @@ class SwiftToken():
     def __init__(self, line, offset, tokenType, content):
         self.line      = line
         self.offset    = offset
-        self.content   = content
         self.tokenType = tokenType
+        self.content   = content
 
     def __repr__(self):
         return self.content + ' ' + self.tokenType
@@ -49,47 +49,24 @@ class SwiftToken():
         return {}
 
 
-def getLinenumberFunction(source):
-    linenum_map = map(lambda x: 1 if x == '\n' else 0, source) # FIXME: check CRLF or LF
-    def func(offset):
-        return sum(linenum_map[:offset], 1)
-    return func
-
-def getOmittedTokens(tokens, source):
-    get_linenumber = getLinenumberFunction(source)
-
-    omitted = []
-    prev_offset = 0
-
-    def append_if_not_empty(prev_offset, offset):
-        s = source[prev_offset : offset]
-        if len(s) > 0:
-            omitted.append(SwiftToken(get_linenumber(prev_offset), prev_offset, "omittedtoken", s))
-
-    def process_token(tk):
-        offset = tk['offset']
-        append_if_not_empty(prev_offset, offset)
-        return offset + tk['length']
-
-    for i in tokens:
-        prev_offset = process_token(i)
-    append_if_not_empty(prev_offset, len(source))
-
-    return omitted
-
 def getSwiftTokens(tokens, source):
-    get_linenumber = getLinenumberFunction(source)
+    linenum_map = map(lambda x: 1 if x == '\n' else 0, source) # FIXME: check CRLF or LF
+    def getLinenumber(offset):
+        return sum(linenum_map[:offset], 1)
+
+    def getOmittedTokens(tokens, source):
+        begins = [0] + [t['offset'] + t['length'] for t in tokens]
+        ends   = [t['offset'] for t in tokens] + [len(source)]
+        return [SwiftToken(getLinenumber(b), b, "omittedtoken", source[b:e]) for b,e in zip(begins, ends) if b != e]
 
     def conv(tk):
         offset = tk['offset']
         length = tk['length']
         tktype = tk['type']
-        s = source[offset : offset + length]
-        return SwiftToken(get_linenumber(offset), offset, tktype, s)
+        return SwiftToken(getLinenumber(offset), offset, tktype, source[offset : offset + length])
 
-    ts = [conv(e) for e in tokens]
-    os = getOmittedTokens(tokens, source)
-    return sorted(ts + os, key=lambda e: e.offset)
+    merged = map(conv, tokens) + getOmittedTokens(tokens, source)
+    return sorted(merged, key=lambda e: e.offset)
 
 def tokenrange(tokens, offset, length):
     start = None
@@ -566,28 +543,24 @@ def visitTypealias(tokens):
     return SwiftTypealias(label, typeident)
 
 def getTokenForDecl(tokens, offset, length):
+    def getRangeForDecl(tokens, offset, length):
+        tkrange = tokenrange(tokens, offset, length)
+        start   = tkrange[0]
+        end     = tkrange[-1] + 1
+
+        # include other elements of last line
+        last_linenum = tokens[end - 1].line
+        for pos in range(end, len(tokens)):
+            if tokens[pos].line != last_linenum:
+                return range(start, pos)
+
+        return range(start, end)
+
     return [tokens[i] for i in getRangeForDecl(tokens, offset, length)]
 
-def getRangeForDecl(tokens, offset, length):
-    tkrange = tokenrange(tokens, offset, length)
-    start   = tkrange[0]
-    end     = tkrange[-1] + 1
-
-    # include other elements of last line
-    last_linenum = tokens[end - 1].line
-    for pos in range(end, len(tokens)):
-        if tokens[pos].line != last_linenum:
-            return range(start, pos)
-
-    return range(start, end)
-
 def getAnnotations(tokens):
-    for t in tokens:
-        if t.isComment:
-            annons = t.annotations
-            if len(annons) > 0:
-                return annons # FIXME: merge two or more annotation comments
-    return {}
+    annons = [t.annotations for t in tokens if t.isComment] + [{}]
+    return annonsx[0]
 
 def getTokenList(filepath):
     with file(filepath) as f:
@@ -675,12 +648,6 @@ class RouterAnnotation:
         if len(union) == 0: return ''
         lets = [i if i in union else '_' for i in params]
         return '(let (' + ', '.join(lets) + '))'
-
-    @property
-    def params(self):
-        pathParams, params = self.paramSets()
-        diff = set(params).difference(set(pathParams))
-        lets = [i if i in diff else None for i in params]
 
 class WSAnnotation:
     def __init__(self, case_or_class):
