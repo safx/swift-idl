@@ -867,49 +867,6 @@ public func toJSON() -> ${enum.inheritedTypes[0]} {
 ''')
         return indent(template.render(enum=swiftEnum))
 
-class EJDB():
-    def processClass(self, swiftClass):
-        template = Template('''
-public ${clazz.static} func parseBSON(iter: BSONIterater) throws -> ${clazz.name} {
-    % for v in clazz.variables:
-    <%
-        an = v.annotation('json')
-        parse = 'parseBSONArrayForNullable' if v.isArrayOfOptional else 'parseBSONArray'
-    %>
-    % if not an.isOmitValue:
-    let ${v.name}: ${v.typename}
-    do {
-        let type = itor.find("${an.jsonLabel}")
-
-        if type == BSON_UNDEFINED {
-        % if v.hasDefaultValue:
-            ${v.name} = ${v.defaultValue}
-        % else:
-            throw JSONDecodeError.MissingKey(key: "${an.jsonLabel}", object: data)
-        % endif
-        } else if type == BSON_NULL {
-        % if v.hasDefaultValue:
-            ${v.name} = ${v.defaultValue}
-        % else:
-            throw JSONDecodeError.MissingKey(key: "${an.jsonLabel}", object: data)
-        % endif
-        } else {
-        % if v.isArray:
-            ${v.name} = try ${v.baseTypename}.${parse}(itor)
-        % else:
-            ${v.name} = try ${v.baseTypename}.parseBSON(itor)
-        % endif
-        }
-    }
-    % endif
-    //
-    % endfor
-    <% jsonInits = ', '.join([v.name + ': ' + v.name for v in clazz.variables if not v.annotation('json').isOmitValue]) %>
-    return ${clazz.name}(${jsonInits})
-}
-''')
-        return indent(template.render(clazz=swiftClass))
-
 class ErrorType():
     @property
     def protocolEnum(self): return ['ErrorType']

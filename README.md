@@ -10,7 +10,6 @@ Swift-IDL can generate Swift source code adding some functionality from inherite
 * Printable (generates `CustomStringConvertible`)
 * URLRequestHelper
 * APIKitHelper (for [APIKit](https://github.com/ishkawa/APIKit))
-* EJDB
 * EnumStaticInit (WIP, maybe dropped)
 * NSCoding (WIP, maybe dropped)
 
@@ -172,4 +171,5 @@ curl 'https://api.example.com/some/api' | json2idl.py -a -c some-API  >> IDL/Som
 
 You should modify some keywords whose types are not determined.
 You also modify or comment out some keywords like `private` since `swift-idl` can't process properties of Swift's resorved words currently.
-If you'll use this command with option `-a` (APIKet), you should add properties for this request.
+
+You can use this command with option `-a` (APIKit). You should add properties for this request in this case.
