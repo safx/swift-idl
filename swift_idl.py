@@ -33,21 +33,10 @@ class SwiftToken():
 
     @property
     def annotations(self):
-        def parseAnnon(s):
-            m = re.match(r'^(\w+):"([^"]+)"$', s)
-            if m:
-                g = m.groups()
-                if len(g) == 2:
-                    return (g[0].lower(), map(str.strip, g[1].split(',')))
-            return None
-
         cs = self.content.split('//')
-        if len(cs) >= 2:
-            # the first comment area is only checked
-            splitted = re.findall(r'\b\w+:"[^"]+"', cs[1])
-            return {q[0]:q[1] for q in map(parseAnnon, splitted) if q != None}
-        return {}
-
+        if len(cs) < 2: return {}
+        # the first comment area is only checked
+        return {g.group(1).lower():map(str.strip, g.group(2).split(',')) for g in re.finditer(r'\b(\w+):"([^"]+)"', cs[1]) if g.lastindex == 2}
 
 def getSwiftTokens(tokens, source):
     linenum_map = map(lambda x: 1 if x == '\n' else 0, source) # FIXME: check CRLF or LF
@@ -560,7 +549,7 @@ def getTokenForDecl(tokens, offset, length):
 
 def getAnnotations(tokens):
     annons = [t.annotations for t in tokens if t.isComment] + [{}]
-    return annonsx[0]
+    return annons[0]
 
 def getTokenList(filepath):
     with file(filepath) as f:
