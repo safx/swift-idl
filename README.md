@@ -4,14 +4,15 @@ Swift-IDL generates Swift source from Swift source.
 
 Swift-IDL can generate Swift source code adding some functionality from inherited *peseudo* protocols as follows:
 
-* JSONEncodable
-* JSONDecodable
-* ClassInit
-* Printable (generates `CustomStringConvertible`)
-* URLRequestHelper
-* APIKitHelper (for [APIKit](https://github.com/ishkawa/APIKit))
-* EnumStaticInit (WIP, maybe dropped)
-* NSCoding (WIP, maybe dropped)
+* `JSONEncodable`
+* `JSONDecodable`
+* `ClassInit` (memberwise initializer for class and struct)
+* `Printable` (generates `CustomStringConvertible`)
+* `URLRequestHelper`
+* `APIKitHelper` (REST API Helper for [APIKit](https://github.com/ishkawa/APIKit))
+* `WSHelper` (WebSocket helper for [Starscream](https://github.com/daltoniam/starscream))
+* `EnumStaticInit` (case-wise initializer for enum) (WIP, maybe dropped)
+* `NSCoding` (WIP, maybe dropped)
 
 All available protocols are declared in IDLProtocols.swift.
 
