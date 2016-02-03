@@ -282,17 +282,17 @@ class SwiftEnum(object):
 
     def getDeclarationString(self, protocols, isRootLevel = True):
         template = Template('''
-public enum ${enum.name}${inh} {
+public enum ${enum.name}${inheritances} {
     % for c in enum.cases:
     case ${c.declaredString}
     % endfor
 
-% for r in rs:
+% for i in innerDecls:
 //
-${r}
+${i}
 % endfor
 
-% for s in sub:
+% for s in subDecls:
 //
 ${s}
 % endfor
@@ -306,9 +306,9 @@ ${s}
         typeInheritances = sum([p.protocolEnum if hasattr(p, 'protocolEnum') else [] for p in ps], getNonIdlProtocols(protocols, self._inheritedTypes))
 
         output = template.render(enum=self,
-                                 rs=filter(lambda e: e != None, map(lambda e: e.processEnum(self), ps)),
-                                 inh=': ' + ', '.join(typeInheritances) if len(typeInheritances) > 0 else '',
-                                 sub=map(lambda e: e.getDeclarationString(protocols, False), self._substructure))
+                                 innerDecls=filter(lambda e: e != None, map(lambda e: e.processEnum(self), ps)),
+                                 inheritances=': ' + ', '.join(typeInheritances) if len(typeInheritances) > 0 else '',
+                                 subDecls=map(lambda e: e.getDeclarationString(protocols, False), self._substructure))
         return indent(output, isRootLevel)
 
 class SwiftClass(SwiftVariableList):
@@ -336,7 +336,7 @@ class SwiftClass(SwiftVariableList):
 
     def getDeclarationString(self, protocols, isRootLevel = True):
         template = Template('''
-public ${clazz.decltype} ${clazz.name}${inh} {
+public ${clazz.decltype} ${clazz.name}${inheritances} {
     % for a in clazz.typealiases:
     public typealias ${a.name} = ${a.assignment}
     % endfor
@@ -344,16 +344,21 @@ public ${clazz.decltype} ${clazz.name}${inh} {
     ${v.parsedDeclarationWithoutDefaultValue}
     % endfor
 
-% for r in rs:
+% for i in innerDecls:
 //
-${r}
+${i}
 % endfor
 
-% for s in sub:
+% for s in subDecls:
 //
 ${s}
 % endfor
 }
+% for i in outerDecls:
+//
+${i}
+//
+% endfor
 ''')
         ps = getIdlProtocols(protocols, self._inheritedTypes, 'ClassDefault')
         for p in ps:
@@ -361,10 +366,15 @@ ${s}
 
         typeInheritances = sum([p.protocolClass if hasattr(p, 'protocolClass') else [] for p in ps], getNonIdlProtocols(protocols, self._inheritedTypes))
 
+        decls = [e.processClass(self) for e in ps]
+        tupledDecls = [(e, None) if type(e) == unicode else e for e in decls]
+        innerDecls, outerDecls = zip(*tupledDecls) # unzip
+
         output = template.render(clazz=self,
-                                 rs=[e.processClass(self) for e in ps],
-                                 inh=': ' + ', '.join(typeInheritances) if len(typeInheritances) > 0 else '',
-                                 sub=map(lambda e: e.getDeclarationString(protocols, False), self._substructure))
+                                 innerDecls=innerDecls,
+                                 outerDecls=filter(lambda e: e, outerDecls),
+                                 inheritances=': ' + ', '.join(typeInheritances) if len(typeInheritances) > 0 else '',
+                                 subDecls=map(lambda e: e.getDeclarationString(protocols, False), self._substructure))
         return indent(output, isRootLevel)
 
 
