@@ -141,6 +141,9 @@ class SwiftVariableBase(object):
     def isOptional(self): return self._typename[-1] == '?' # FIXME
 
     @property
+    def isPrimitive(self): return self.typename in ['Int', 'String'] # FIXME
+
+    @property
     def isArray(self): return self._typename[0] == '[' # FIXME
 
     @property
@@ -863,6 +866,48 @@ public func toJSON() -> ${enum.inheritedTypes[0]} {
 }
 ''')
         return indent(template.render(enum=swiftEnum))
+
+
+class Lens():
+    def processClass(self, swiftClass):
+        templateInnter = Template('''
+struct Lenses {
+    % for v in clazz.variables:
+    static let ${v.name} = Lens<${clazz.name}, ${v.typename}>(
+        get: { $0.${v.name} },
+        set: { (newValue, me) in
+        <%
+        p = ', '.join([w.name + ': ' + ('newValue' if v.name == w.name else 'me.' + w.name) for w in clazz.variables])
+        %>
+            ${clazz.name}(${p})
+        }
+    )
+    % endfor
+}
+//
+var throughLens: BoundLensTo${clazz.name}<${clazz.name}> {
+    return BoundLensTo${clazz.name}<${clazz.name}>(instance: self, lens: createIdentityLens())
+}
+''')
+        templateOuter = Template('''
+struct BoundLensTo${clazz.name}<Whole>: BoundLensType {
+    typealias Part = ${clazz.name}
+    let boundLensStorage: BoundLensStorage<Whole, Part>
+    % for v in clazz.variables:
+    % if v.isPrimitive:
+    var ${v.name}: BoundLens<Whole, ${v.typename}> {
+        return BoundLens<Whole, ${v.typename}>(parent: self, sublens: ${clazz.name}.Lenses.${v.name})
+    }
+    % else:
+    var ${v.name}: BoundLensTo${v.typename}<Whole> {
+        return BoundLensTo${v.typename}<Whole>(parent: self, sublens: ${clazz.name}.Lenses.${v.name})
+    }
+    % endif
+    % endfor
+}
+''')
+        return indent(templateInnter.render(clazz=swiftClass)), templateOuter.render(clazz=swiftClass)
+
 
 class ErrorType():
     @property
