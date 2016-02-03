@@ -141,7 +141,8 @@ class SwiftVariableBase(object):
     def isOptional(self): return self._typename[-1] == '?' # FIXME
 
     @property
-    def isPrimitive(self): return self.typename in ['Int', 'String'] # FIXME
+    def isClassOrStruct(self):
+        return not self.baseTypename in ['Int', 'Float', 'String'] # FIXME
 
     @property
     def isArray(self): return self._typename[0] == '[' # FIXME
@@ -309,7 +310,7 @@ ${s}
         typeInheritances = sum([p.protocolEnum if hasattr(p, 'protocolEnum') else [] for p in ps], getNonIdlProtocols(protocols, self._inheritedTypes))
 
         output = template.render(enum=self,
-                                 innerDecls=filter(lambda e: e != None, map(lambda e: e.processEnum(self), ps)),
+                                 innerDecls=[indent(Template(e.enumTemplate).render(enum=self)) for e in ps if e.enumTemplate != None],
                                  inheritances=': ' + ', '.join(typeInheritances) if len(typeInheritances) > 0 else '',
                                  subDecls=map(lambda e: e.getDeclarationString(protocols, False), self._substructure))
         return indent(output, isRootLevel)
@@ -369,13 +370,13 @@ ${i}
 
         typeInheritances = sum([p.protocolClass if hasattr(p, 'protocolClass') else [] for p in ps], getNonIdlProtocols(protocols, self._inheritedTypes))
 
-        decls = [e.processClass(self) for e in ps]
-        tupledDecls = [(e, None) if type(e) == unicode else e for e in decls]
-        innerDecls, outerDecls = zip(*tupledDecls) # unzip
+        templates = [e.classTemplates for e in ps]
+        tupledTemplates = [e if type(e) == tuple else (e, None) for e in templates if e]
+        innerTemplates, outerTemplates = zip(*tupledTemplates) # unzip
 
         output = template.render(clazz=self,
-                                 innerDecls=innerDecls,
-                                 outerDecls=filter(lambda e: e, outerDecls),
+                                 innerDecls=[indent(Template(e).render(clazz=self)) for e in innerTemplates],
+                                 outerDecls=[Template(e).render(clazz=self) for e in outerTemplates if e],
                                  inheritances=': ' + ', '.join(typeInheritances) if len(typeInheritances) > 0 else '',
                                  subDecls=map(lambda e: e.getDeclarationString(protocols, False), self._substructure))
         return indent(output, isRootLevel)
@@ -733,8 +734,9 @@ def indent(text, isRootLevel=False):
 ### Render Class (IDL protocols)
 
 class ClassInit():
-    def processClass(self, swiftClass):
-        template = Template('''
+    @property
+    def classTemplates(self):
+        return '''
 <%
     p = ', '.join([v.name + ': ' + v.typename + (' = ' + v.defaultValue if v.hasDefaultValue else '') for v in clazz.variables])
 %>
@@ -743,8 +745,8 @@ public init(${p}) {
     self.${v.name} = ${v.name}
     % endfor
 }
-''')
-        return indent(template.render(clazz=swiftClass))
+'''
+
 
 class JSONDecodable():
     @property
@@ -753,8 +755,9 @@ class JSONDecodable():
     @property
     def protocolEnum(self): return ['JSONDecodable']
 
-    def processClass(self, swiftClass):
-        template = Template('''
+    @property
+    def classTemplates(self):
+        return '''
 public ${clazz.static} func parseJSON(data: AnyObject) throws -> ${clazz.name} {
     if !(data is NSDictionary) {
         throw JSONDecodeError.TypeMismatch(key: "(${clazz.name})", object: data, expected: NSDictionary.self, actual: data.dynamicType)
@@ -794,11 +797,11 @@ public ${clazz.static} func parseJSON(data: AnyObject) throws -> ${clazz.name} {
     <% jsonInits = ', '.join([v.name + ': ' + v.name for v in clazz.variables if not v.annotation('json').isOmitValue]) %>
     return ${clazz.name}(${jsonInits})
 }
-''')
-        return indent(template.render(clazz=swiftClass))
+'''
 
-    def processEnum(self, swiftEnum):
-        template = Template('''
+    @property
+    def enumTemplate(self):
+        return '''
 public static func parseJSON(data: AnyObject) throws -> ${enum.name} {
 % if enum.isRawStyle:
     if let v = data as? ${enum.inheritedTypes[0]}, val = ${enum.name}(rawValue: v) {
@@ -829,16 +832,16 @@ public static func parseJSON(data: AnyObject) throws -> ${enum.name} {
 % endif
     throw JSONDecodeError.ValueTranslationFailed(type: ${enum.name}.self, object: data)
 }
-''')
-        return indent(template.render(enum=swiftEnum))
+'''
 
 
 class JSONEncodable():
     @property
     def protocolClass(self): return ['JSONEncodable']
 
-    def processClass(self, swiftClass):
-        template = Template('''
+    @property
+    def classTemplates(self):
+        return '''
 public func toJSON() -> [String: AnyObject] {
     return [
     % for v in clazz.variables:
@@ -856,31 +859,29 @@ public func toJSON() -> [String: AnyObject] {
     % endfor
     ]
 }
-''')
-        return indent(template.render(clazz=swiftClass))
+'''
 
-    def processEnum(self, swiftEnum):
-        template = Template('''
+    @property
+    def enumTemplate(self):
+        return '''
 public func toJSON() -> ${enum.inheritedTypes[0]} {
     return rawValue
 }
-''')
-        return indent(template.render(enum=swiftEnum))
+'''
 
 
 class Lens():
-    def processClass(self, swiftClass):
-        templateInnter = Template('''
+    @property
+    def classTemplates(self):
+        templateInner = '''
 struct Lenses {
     % for v in clazz.variables:
     static let ${v.name} = Lens<${clazz.name}, ${v.typename}>(
         get: { $0.${v.name} },
-        set: { (newValue, me) in
         <%
-        p = ', '.join([w.name + ': ' + ('newValue' if v.name == w.name else 'me.' + w.name) for w in clazz.variables])
+        p = ', '.join([w.name + ': ' + ('newValue' if v.name == w.name else 'this.' + w.name) for w in clazz.variables])
         %>
-            ${clazz.name}(${p})
-        }
+        set: { (newValue, this) in ${clazz.name}(${p}) }
     )
     % endfor
 }
@@ -888,40 +889,42 @@ struct Lenses {
 var throughLens: BoundLensTo${clazz.name}<${clazz.name}> {
     return BoundLensTo${clazz.name}<${clazz.name}>(instance: self, lens: createIdentityLens())
 }
-''')
-        templateOuter = Template('''
+'''
+        templateOuter = '''
 struct BoundLensTo${clazz.name}<Whole>: BoundLensType {
     typealias Part = ${clazz.name}
     let boundLensStorage: BoundLensStorage<Whole, Part>
     % for v in clazz.variables:
-    % if v.isPrimitive:
-    var ${v.name}: BoundLens<Whole, ${v.typename}> {
-        return BoundLens<Whole, ${v.typename}>(parent: self, sublens: ${clazz.name}.Lenses.${v.name})
+    % if v.isClassOrStruct:
+    var ${v.name}: BoundLensTo${v.baseTypename}<Whole> {
+        return BoundLensTo${v.baseTypename}<Whole>(parent: self, sublens: ${clazz.name}.Lenses.${v.name})
     }
     % else:
-    var ${v.name}: BoundLensTo${v.typename}<Whole> {
-        return BoundLensTo${v.typename}<Whole>(parent: self, sublens: ${clazz.name}.Lenses.${v.name})
+    var ${v.name}: BoundLens<Whole, ${v.typename}> {
+        return BoundLens<Whole, ${v.typename}>(parent: self, sublens: ${clazz.name}.Lenses.${v.name})
     }
     % endif
     % endfor
 }
-''')
-        return indent(templateInnter.render(clazz=swiftClass)), templateOuter.render(clazz=swiftClass)
+'''
+        return templateInner, templateOuter
 
 
 class ErrorType():
     @property
     def protocolEnum(self): return ['ErrorType']
 
-    def processEnum(self, swiftEnum): return None
+    @property
+    def enumTemplate(self): return None
 
 
 class NSCoding():
     @property
     def protocolClass(self): return ['NSCoding']
 
-    def processClass(self, swiftClass):
-        template = Template('''
+    @property
+    def classTemplates(self):
+        return '''
 required public init?(coder: NSCoder) {
     var failed = false
 
@@ -956,8 +959,8 @@ public func encodeWithCoder(coder: NSCoder) {
 % endif
 % endfor
 }
-''')
-        return indent(template.render(clazz=swiftClass))
+'''
+
 
 class Printable():
     @property
@@ -966,23 +969,24 @@ class Printable():
     @property
     def protocolEnum(self): return ['CustomStringConvertible']
 
-    def processClass(self, swiftClass):
+    @property
+    def classTemplates(self):
         # FIXME: always public
-        template = Template('''
+        return '''
 <%
     p = ", ".join(["%s=\(%s)" % (v.name, v.name) for v in clazz.variables])
 %>
 public var description: String {
     return "${clazz.name}(${p})"
 }
-''')
-        return indent(template.render(clazz=swiftClass))
+'''
 
-    def processEnum(self, swiftEnum):
+    @property
+    def enumTemplate(self):
         if swiftEnum.isRawStyle:
-            return '    public var description: String { return rawValue }'
+            return 'public var description: String { return rawValue }'
 
-        template = Template('''
+        return '''
 public var description: String {
     switch self {
     % for case in enum.cases:
@@ -994,16 +998,16 @@ public var description: String {
     % endfor
     }
 }
-''')
-        return indent(template.render(enum=swiftEnum))
+'''
 
 
 class EnumStaticInit():
-    def processEnum(self, swiftEnum):
+    @property
+    def enumTemplate(self):
         if swiftEnum.isRawStyle:
             return None # FIXME
         else:
-            template = Template('''
+            return '''
 % for case in enum.cases:
 <%
     ais = map(lambda x: '%s: %s = %s()' % (x._name, x.typename, x.typename) if x._name else 'arg%d: %s = %s()' % (x._positon, x.typename, x.typename), case.variables)
@@ -1015,16 +1019,16 @@ public static func make${case._label}(${params}) -> ${enum.name} {
     return .${case._label}${out}
 }
 % endfor
-''')
-            return indent(template.render(enum=swiftEnum))
+'''
 
 
 class URLRequestHelper():
-    def processEnum(self, swiftEnum):
+    @property
+    def enumTemplate(self):
         if swiftEnum.isRawStyle:
             return None # FIXME
         else:
-            template = Template('''
+            return '''
 public var method: String {
     switch self {
     % for case in enum.cases:
@@ -1081,8 +1085,7 @@ public var params: [String: AnyObject] {
     default: return [:]
     }
 }
-''')
-            return indent(template.render(enum=swiftEnum))
+'''
 
 
 class APIKitHelper():
@@ -1091,8 +1094,9 @@ class APIKitHelper():
         if len([e for e in swiftClass.typealiases if e.name == 'APIKitResponse']) == 0:
             swiftClass.typealiases.append(SwiftTypealias('APIKitResponse', swiftClass.name + 'Response'))
 
-    def processClass(self, swiftClass):
-        template = Template('''
+    @property
+    def classTemplates(self):
+        return '''
 <%
  an = clazz.annotation('router')
 %>
@@ -1135,8 +1139,7 @@ public var parameters: [String: AnyObject] {
     % endif
 
 }
-''')
-        return indent(template.render(clazz=swiftClass))
+'''
 
 
 class WSHelper():
@@ -1146,8 +1149,9 @@ class WSHelper():
             if len(c.variables) == 0 and not anon.isOmitValue:
                 c._variables = [SwiftTupleVariable(None, anon.typename, 0)]
 
-    def processEnum(self, swiftEnum):
-        template = Template('''
+    @property
+    def enumTemplate(self):
+        return '''
 
 static func parse(type: String, data:[String:AnyObject]) throws -> ${enum.name}? {
     % for case in enum.cases:
@@ -1161,9 +1165,7 @@ static func parse(type: String, data:[String:AnyObject]) throws -> ${enum.name}?
     % endfor
     return nil // FIXME
 }
-
-''')
-        return indent(template.render(enum=swiftEnum))
+'''
 
 
 ### command line pipe lines
