@@ -36,7 +36,9 @@ class SwiftToken():
         cs = self.content.split('//')
         if len(cs) < 2: return {}
         # the first comment area is only checked
-        return {g.group(1).lower():map(str.strip, g.group(2).split(',')) for g in re.finditer(r'\b(\w+):"([^"]+)"', cs[1]) if g.lastindex == 2}
+        return {g.group(1).lower():map(str.strip, g.group(2).split(','))
+                for g in re.finditer(r'\b(\w+):"([^"]+)"', cs[1])
+                if g.lastindex == 2}
 
 def getSwiftTokens(tokens, source):
     linenum_map = map(lambda x: 1 if x == '\n' else 0, source) # FIXME: check CRLF or LF
@@ -46,7 +48,9 @@ def getSwiftTokens(tokens, source):
     def getOmittedTokens(tokens, source):
         begins = [0] + [t['offset'] + t['length'] for t in tokens]
         ends   = [t['offset'] for t in tokens] + [len(source)]
-        return [SwiftToken(getLinenumber(b), b, "omittedtoken", source[b:e]) for b,e in zip(begins, ends) if b != e]
+        return [SwiftToken(getLinenumber(b), b, "omittedtoken", source[b:e])
+                for b,e in zip(begins, ends)
+                if b != e]
 
     def conv(tk):
         offset = tk['offset']
@@ -263,17 +267,15 @@ class SwiftEnum(object):
     def annotations(self): return self._annotations
 
     @property
-    def isRawType(self):
+    def isRawStyle(self):
         if len(self._inheritedTypes) > 0:
             n = self._inheritedTypes[0]
             return n in ['String', 'Int', 'Float', 'Character'] # FIXME: naive guess
         return False
 
-    @property
-    def rawType(self):
-        if self.isRawType:
-            return self._inheritedTypes[0]
-        return None
+    #@property
+    #def rawType(self):
+    #    return self.isRawStyle if self._inheritedTypes[0] else None
 
     def annotation(self, name):
         return getAnnotationMap()[name](self)
@@ -297,7 +299,6 @@ ${s}
 }
 ''')
         ps = getIdlProtocols(protocols, self._inheritedTypes, 'EnumDefault')
-        rawType = self.rawType
 
         for p in ps:
             if hasattr(p, 'modifyEnum'): p.modifyEnum(self)
@@ -369,8 +370,9 @@ ${s}
 
 ### Parsing functions
 
-def visitProtocol(node, clazz):
+def visitProtocol(node):
     name = node['key.name']
+    clazz = globals()[name]
     inheritedtypes = map(lambda e: e['key.name'], node.get('key.inheritedtypes', []))
     return SwiftProtocol(name, inheritedtypes, clazz)
 
@@ -690,12 +692,8 @@ def getIdlProtocolByName(protocols, name):
 
 def getIdlProtocols(protocols, typenames, default_protocols):
     def getIdlProtocolsByNames(protocols, names):
-        ret = []
-        for n in names:
-            clazz = getIdlProtocolByName(protocols, n)
-            if clazz:
-                ret.append(clazz())
-        return ret
+        clazzes = [getIdlProtocolByName(protocols, n) for n in names]
+        return [c() for c in clazzes if c]
 
     def getDefaultIdlProtocol(protocols, name = 'Default'):
         for p in protocols:
@@ -789,7 +787,7 @@ public ${clazz.static} func parseJSON(data: AnyObject) throws -> ${clazz.name} {
     def processEnum(self, swiftEnum):
         template = Template('''
 public static func parseJSON(data: AnyObject) throws -> ${enum.name} {
-% if enum.rawType:
+% if enum.isRawStyle:
     if let v = data as? ${enum.inheritedTypes[0]}, val = ${enum.name}(rawValue: v) {
         return val
     }
@@ -926,7 +924,7 @@ public var description: String {
         return indent(template.render(clazz=swiftClass))
 
     def processEnum(self, swiftEnum):
-        if swiftEnum.isRawType:
+        if swiftEnum.isRawStyle:
             return '    public var description: String { return rawValue }'
 
         template = Template('''
@@ -947,7 +945,7 @@ public var description: String {
 
 class EnumStaticInit():
     def processEnum(self, swiftEnum):
-        if swiftEnum.isRawType:
+        if swiftEnum.isRawStyle:
             return None # FIXME
         else:
             template = Template('''
@@ -968,7 +966,7 @@ public static func make${case._label}(${params}) -> ${enum.name} {
 
 class URLRequestHelper():
     def processEnum(self, swiftEnum):
-        if swiftEnum.isRawType:
+        if swiftEnum.isRawStyle:
             return None # FIXME
         else:
             template = Template('''
@@ -1162,17 +1160,7 @@ def gatherIDLProtocol(structure):
             return ls
 
     protocol_nodes = sum(processProject(getProtocolNode, structure).values(), [])
-
-    protocols = []
-    for node in protocol_nodes:
-        name = node['key.name']
-        idl_clazz = globals().get(name, None)
-        if idl_clazz:
-            protocols.append(visitProtocol(node, idl_clazz))
-        #else:
-        #    print("Warning: protocol '%s' can not be processed." % name)
-
-    return protocols
+    return [visitProtocol(node) for node in protocol_nodes if node['key.name'] in globals()]
 
 def getDeclarations(ls, n, tokens):
     if n.get('key.kind', None) == 'source.lang.swift.decl.class' or n.get('key.kind', None) == 'source.lang.swift.decl.struct':
@@ -1187,24 +1175,17 @@ def getImports(filepath):
     im = False
     for t in getTokenList(filepath):
         if t.tokenType == 'source.lang.swift.syntaxtype.keyword':
-            if t.content == 'import':
-                im = True
-            else:
-                break
-        if t.tokenType == 'source.lang.swift.syntaxtype.identifier':
-            if im == True:
+            im = t.content == 'import'
+        elif t.tokenType == 'source.lang.swift.syntaxtype.identifier':
+            if im:
                 r.append(t.content.strip())
-            else:
-                break
+            im = False
     return r
 
 def resolveProject(proj):
     if proj: return proj
-    for i in os.listdir('.'):
-        _, ext = os.path.splitext(i)
-        if ext == '.xcodeproj':
-            return i
-    return None
+    projs = [f for f in os.listdir('.') if os.path.splitext(f)[1] == '.xcodeproj']
+    return sorted(projs)[0] if len(projs) > 0 else None
 
 def execute():
     args = parseArgs()
