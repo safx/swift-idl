@@ -141,10 +141,6 @@ class SwiftVariableBase(object):
     def isOptional(self): return self._typename[-1] == '?' # FIXME
 
     @property
-    def isClassOrStruct(self):
-        return not self.baseTypename in ['Int', 'Float', 'String'] # FIXME
-
-    @property
     def isArray(self): return self._typename[0] == '[' # FIXME
 
     @property
@@ -284,7 +280,7 @@ class SwiftEnum(object):
     def annotation(self, name):
         return getAnnotationMap()[name](self)
 
-    def getDeclarationString(self, protocols, isRootLevel = True):
+    def getDeclarationString(self, classes, protocols, isRootLevel = True):
         template = Template('''
 public enum ${enum.name}${inheritances} {
     % for c in enum.cases:
@@ -312,7 +308,7 @@ ${s}
         output = template.render(enum=self,
                                  innerDecls=[indent(Template(e.enumTemplate).render(enum=self)) for e in ps if e.enumTemplate != None],
                                  inheritances=': ' + ', '.join(typeInheritances) if len(typeInheritances) > 0 else '',
-                                 subDecls=map(lambda e: e.getDeclarationString(protocols, False), self._substructure))
+                                 subDecls=map(lambda e: e.getDeclarationString(classes, protocols, False), self._substructure))
         return indent(output, isRootLevel)
 
 class SwiftClass(SwiftVariableList):
@@ -338,7 +334,7 @@ class SwiftClass(SwiftVariableList):
     @property
     def static(self): return 'static' if self._decltype == 'struct' else 'class'
 
-    def getDeclarationString(self, protocols, isRootLevel = True):
+    def getDeclarationString(self, classes, protocols, isRootLevel = True):
         template = Template('''
 public ${clazz.decltype} ${clazz.name}${inheritances} {
     % for a in clazz.typealiases:
@@ -364,21 +360,25 @@ ${i}
 //
 % endfor
 ''')
-        ps = getIdlProtocols(protocols, self._inheritedTypes, 'ClassDefault')
+        ps = getIdlProtocols(protocols, self.inheritedTypes, 'ClassDefault')
         for p in ps:
             if hasattr(p, 'modifyClass'): p.modifyClass(self)
 
-        typeInheritances = sum([p.protocolClass if hasattr(p, 'protocolClass') else [] for p in ps], getNonIdlProtocols(protocols, self._inheritedTypes))
+        typeInheritances = sum([p.protocolClass if hasattr(p, 'protocolClass') else [] for p in ps], getNonIdlProtocols(protocols, self.inheritedTypes))
 
         templates = [e.classTemplates for e in ps]
         tupledTemplates = [e if type(e) == tuple else (e, None) for e in templates if e]
         innerTemplates, outerTemplates = zip(*tupledTemplates) # unzip
 
+        templateParams = {
+            'classes': classes,
+            'clazz': self,
+        }
         output = template.render(clazz=self,
-                                 innerDecls=[indent(Template(e).render(clazz=self)) for e in innerTemplates],
-                                 outerDecls=[Template(e).render(clazz=self) for e in outerTemplates if e],
+                                 innerDecls=[indent(Template(e).render(**templateParams)) for e in innerTemplates],
+                                 outerDecls=[Template(e).render(**templateParams) for e in outerTemplates if e],
                                  inheritances=': ' + ', '.join(typeInheritances) if len(typeInheritances) > 0 else '',
-                                 subDecls=map(lambda e: e.getDeclarationString(protocols, False), self._substructure))
+                                 subDecls=map(lambda e: e.getDeclarationString(classes, protocols, False), self._substructure))
         return indent(output, isRootLevel)
 
 
@@ -884,18 +884,20 @@ struct Lenses {
         set: { (newValue, this) in ${clazz.name}(${p}) }
     )
     % endfor
-}
-//
-var throughLens: BoundLensTo${clazz.name}<${clazz.name}> {
-    return BoundLensTo${clazz.name}<${clazz.name}>(instance: self, lens: createIdentityLens())
-}
-'''
+}'''
+#var throughLens: BoundLensTo${clazz.name}<${clazz.name}> {
+#    return BoundLensTo${clazz.name}<${clazz.name}>(instance: self, lens: createIdentityLens())
+#}
+#'''
         templateOuter = '''
+<%
+   allLenses = [e.name for e in classes if 'Lens' in e.inheritedTypes]
+%>
 struct BoundLensTo${clazz.name}<Whole>: BoundLensType {
     typealias Part = ${clazz.name}
-    let boundLensStorage: BoundLensStorage<Whole, Part>
+    let storage: BoundLensStorage<Whole, Part>
     % for v in clazz.variables:
-    % if v.isClassOrStruct:
+    % if v.baseTypename in allLenses:
     var ${v.name}: BoundLensTo${v.baseTypename}<Whole> {
         return BoundLensTo${v.baseTypename}<Whole>(parent: self, sublens: ${clazz.name}.Lenses.${v.name})
     }
@@ -907,7 +909,7 @@ struct BoundLensTo${clazz.name}<Whole>: BoundLensType {
     % endfor
 }
 '''
-        return templateInner, templateOuter
+        return templateInner#, templateOuter
 
 
 class ErrorType():
@@ -1260,7 +1262,7 @@ def execute():
     structure = sourcekittenDoc(project, args.scheme)
     decls_map = processProject(getDeclarations, structure)
 
-    #classes = sum(decls_map.values(), [])
+    classes = sum(decls_map.values(), [])
     protocols = gatherIDLProtocol(structure)
 
     for filepath, decls in decls_map.items():
@@ -1282,7 +1284,7 @@ def execute():
             for i in getImports(filepath):
                 out.write('import ' + i + '\n')
             out.write('\n\n')
-            map(lambda e: out.write(e.getDeclarationString(protocols) + '\n\n'), decls)
+            map(lambda e: out.write(e.getDeclarationString(classes, protocols) + '\n\n'), decls)
 
 
 if __name__ == '__main__':

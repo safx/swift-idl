@@ -29,68 +29,107 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-struct Lens<Whole, Part> {
+
+// Lenses API
+
+protocol LensType {
+    typealias Whole
+    typealias Part
+    var get: Whole -> Part { get }
+    var set: (Part, Whole) -> Whole { get }
+}
+
+struct Lens<Whole, Part>: LensType {
     let get: Whole -> Part
     let set: (Part, Whole) -> Whole
 }
 
-extension Lens {
-    func compose<Subpart>(other: Lens<Part, Subpart>) -> Lens<Whole, Subpart> {
+struct ArrayLens<Whole, Element>: LensType {
+    typealias Part = [Element]
+    let get: Whole -> Part
+    let set: (Part, Whole) -> Whole
+}
+
+extension LensType {
+    func compose<Subpart, L: LensType where Self.Part == L.Whole, L.Part == Subpart>(other: L) -> Lens<Whole, Subpart> {
         return Lens<Whole, Subpart>(
             get: { whole in
-                let part = self.get(whole)
-                let subpart = other.get(part)
-                return subpart
+                return other.get(self.get(whole))
             },
-            set: { (newSubpart, whole) in
-                let part = self.get(whole)
-                let newPart = other.set(newSubpart, part)
-                let newWhole = self.set(newPart, whole)
-                return newWhole
+            set: { newSubpart, whole in
+                return self.set(other.set(newSubpart, self.get(whole)), whole)
+            }
+        )
+    }
+    func modify(closure: Part -> Part, from: Whole) -> Whole {
+        return set(closure(get(from)), from)
+    }
+}
+
+extension ArrayLens {
+    func at(idx: Int) -> Lens<Whole, Element> {
+        return Lens<Whole, Element>(
+            get: { whole in
+                return self.get(whole)[idx]
+            },
+            set: { newSubpart, whole in
+                var xs = self.get(whole)
+                xs[idx] = newSubpart
+                return self.set(xs, whole)
             }
         )
     }
 }
 
-private func createIdentityLens<Whole>() -> Lens<Whole, Whole> {
+// lenses API Helper
+
+func createIdentityLens<Whole>() -> Lens<Whole, Whole> {
     return Lens<Whole, Whole>(
         get: { $0 },
         set: { (new, old) in return new }
     )
 }
 
-
+// Bound lenses API
 
 struct BoundLensStorage<Whole, Part> {
     let instance: Whole
     let lens: Lens<Whole, Part>
 }
 
+
 protocol BoundLensType {
     typealias Whole
     typealias Part
-    init(boundLensStorage: BoundLensStorage<Whole, Part>)
-    var boundLensStorage: BoundLensStorage<Whole, Part> { get }
+
+    init(storage: BoundLensStorage<Whole, Part>)
+
+    var storage: BoundLensStorage<Whole, Part> { get }
+
     func get() -> Part
     func set(newPart: Part) -> Whole
 }
 
 extension BoundLensType {
     init(instance: Whole, lens: Lens<Whole, Part>) {
-        self.init(boundLensStorage: BoundLensStorage(instance: instance, lens: lens))
+        self.init(storage: BoundLensStorage(instance: instance, lens: lens))
     }
-    init<Parent: BoundLensType where Parent.Whole == Whole>(parent: Parent, sublens: Lens<Parent.Part, Part>) {
-        let storage = parent.boundLensStorage
-        self.init(instance: storage.instance, lens: storage.lens.compose(sublens))
+
+    init<Parent: BoundLensType, L: LensType where Parent.Whole == Whole, Self.Part == L.Part, Parent.Part == L.Whole>(parent: Parent, sublens: L) {
+        let s = parent.storage
+        self.init(storage: BoundLensStorage(instance: s.instance, lens: s.lens.compose(sublens)))
     }
+
     func get() -> Part {
-        return boundLensStorage.lens.get(boundLensStorage.instance)
+        return storage.lens.get(storage.instance)
     }
+
     func set(newPart: Part) -> Whole {
-        return boundLensStorage.lens.set(newPart, boundLensStorage.instance)
+        return storage.lens.set(newPart, storage.instance)
     }
 }
 
+
 struct BoundLens<Whole, Part>: BoundLensType {
-    let boundLensStorage: BoundLensStorage<Whole, Part>
+    let storage: BoundLensStorage<Whole, Part>
 }
