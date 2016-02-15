@@ -21,4 +21,4 @@ protocol WSHelper {}
 
 protocol ErrorType {}
 
-protocol EJDB {}
+protocol Lensy {}

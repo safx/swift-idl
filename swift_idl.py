@@ -368,7 +368,7 @@ ${i}
 
         templates = [e.classTemplates for e in ps]
         tupledTemplates = [e if type(e) == tuple else (e, None) for e in templates if e]
-        innerTemplates, outerTemplates = zip(*tupledTemplates) # unzip
+        innerTemplates, outerTemplates = zip(*tupledTemplates) if len(tupledTemplates) > 0 else ([], []) # unzip
 
         templateParams = {
             'classes': classes,
@@ -870,46 +870,52 @@ public func toJSON() -> ${enum.inheritedTypes[0]} {
 '''
 
 
-class Lens():
+class Lensy():
     @property
     def classTemplates(self):
         templateInner = '''
-struct Lenses {
+public struct Lenses {
     % for v in clazz.variables:
-    static let ${v.name} = Lens<${clazz.name}, ${v.typename}>(
-        get: { $0.${v.name} },
+    public static let ${v.name} = Lens<${clazz.name}, ${v.typename}>(
+        g: { $0.${v.name} },
         <%
         p = ', '.join([w.name + ': ' + ('newValue' if v.name == w.name else 'this.' + w.name) for w in clazz.variables])
         %>
-        set: { (newValue, this) in ${clazz.name}(${p}) }
+        s: { (this, newValue) in ${clazz.name}(${p}) }
     )
     % endfor
-}'''
-#var throughLens: BoundLensTo${clazz.name}<${clazz.name}> {
-#    return BoundLensTo${clazz.name}<${clazz.name}>(instance: self, lens: createIdentityLens())
-#}
-#'''
+}
+
+public static var $: ${clazz.name}LensHelper<${clazz.name}> {
+    return ${clazz.name}LensHelper<${clazz.name}>(lens: createIdentityLens())
+}
+'''
         templateOuter = '''
 <%
-   allLenses = [e.name for e in classes if 'Lens' in e.inheritedTypes]
+   allLenses = [e.name for e in classes if 'Lensy' in e.inheritedTypes]
 %>
-struct BoundLensTo${clazz.name}<Whole>: BoundLensType {
-    typealias Part = ${clazz.name}
-    let storage: BoundLensStorage<Whole, Part>
+public struct ${clazz.name}LensHelper<Whole>: LensHelperType {
+    public typealias Part = ${clazz.name}
+    public let lens: Lens<Whole, Part>
+    public init(lens: Lens<Whole, Part>) {
+        self.init(lens: lens)
+    }
+
     % for v in clazz.variables:
-    % if v.baseTypename in allLenses:
-    var ${v.name}: BoundLensTo${v.baseTypename}<Whole> {
-        return BoundLensTo${v.baseTypename}<Whole>(parent: self, sublens: ${clazz.name}.Lenses.${v.name})
+    <%
+        helperType = (v.baseTypename + "LensHelper<Whole>") if v.baseTypename in allLenses else ("LensHelper<Whole, " + v.baseTypename + ">")
+        if v.isArray:
+            helperType = "ArrayLensHelper<Whole, %s, %s>" % (v.baseTypename, helperType)
+        elif v.isOptional:
+            helperType = "OptionalLensHelper<Whole, %s, %s>" % (v.baseTypename, helperType)
+    %>
+    public var ${v.name}: ${helperType} {
+        return ${helperType}(parent: self, lens: ${clazz.name}.Lenses.${v.name})
     }
-    % else:
-    var ${v.name}: BoundLens<Whole, ${v.typename}> {
-        return BoundLens<Whole, ${v.typename}>(parent: self, sublens: ${clazz.name}.Lenses.${v.name})
-    }
-    % endif
     % endfor
 }
 '''
-        return templateInner#, templateOuter
+        return templateInner, templateOuter
 
 
 class ErrorType():
