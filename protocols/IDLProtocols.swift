@@ -8,6 +8,7 @@
 
 protocol ClassInit {}
 protocol EnumStaticInit {}
+protocol Equatable {}
 
 protocol Printable {}
 

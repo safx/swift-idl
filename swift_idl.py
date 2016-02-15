@@ -246,6 +246,60 @@ class SwiftCase(SwiftVariableList):
                 p = '(' + ', '.join([e.declaredString for e in self._variables]) + ')'
             return str(self._name) + p
 
+
+def getDeclarationString(clazzOrEnum, clazzOrEnumString, templateHeader, classes, protocols, isRootLevel):
+    template = Template(templateHeader + '''
+% for i in innerDecls:
+//
+${i}
+% endfor
+
+% for s in subDecls:
+//
+${s}
+% endfor
+}
+% for i in outerDecls:
+//
+${i}
+//
+% endfor
+''')
+    def getattrif(me, name, defaultValue = None):
+        if hasattr(me, name):
+            return getattr(me, name)
+        return defaultValue
+
+    def callattrif(me, name, *p):
+        if hasattr(me, name):
+            return getattr(me, name)(*p)
+        return None
+
+    assert(clazzOrEnumString == 'Class' or clazzOrEnumString == 'Enum')
+
+    ps = getIdlProtocols(protocols, clazzOrEnum.inheritedTypes, clazzOrEnumString + 'Default')
+    for p in ps:
+        callattrif(p, 'modify' + clazzOrEnumString, clazzOrEnum)
+
+    subTemplateParams = {
+        'classes': classes,
+        'clazz' if clazzOrEnumString == 'Class' else 'enum': clazzOrEnum
+    }
+
+    templates = [getattrif(p, clazzOrEnumString.lower() + 'Templates') for p in ps]
+    tupledTemplates = [e if type(e) == tuple else (e, None) for e in templates if e]
+    innerTemplates, outerTemplates = zip(*tupledTemplates) if len(tupledTemplates) > 0 else ([], []) # unzip
+    typeInheritances = sum([getattrif(p, 'protocol' + clazzOrEnumString, []) for p in ps], getNonIdlProtocols(protocols, clazzOrEnum.inheritedTypes))
+    templateParams = {
+        'clazz' if clazzOrEnumString == 'Class' else 'enum': clazzOrEnum,
+        'innerDecls': [indent(Template(e).render(**subTemplateParams)) for e in innerTemplates],
+        'outerDecls': [Template(e).render(**subTemplateParams) for e in outerTemplates if e],
+        'inheritances': ': ' + ', '.join(typeInheritances) if len(typeInheritances) > 0 else '',
+        'subDecls': map(lambda e: e.getDeclarationString(classes, protocols, False), clazzOrEnum._substructure)
+    }
+    output = template.render(**templateParams)
+    return indent(output, isRootLevel)
+
 class SwiftEnum(object):
     def __init__(self, name, cases, inheritedTypes, annotations, substructure):
         self._name           = name
@@ -281,35 +335,14 @@ class SwiftEnum(object):
         return getAnnotationMap()[name](self)
 
     def getDeclarationString(self, classes, protocols, isRootLevel = True):
-        template = Template('''
+        header = '''
 public enum ${enum.name}${inheritances} {
     % for c in enum.cases:
     case ${c.declaredString}
     % endfor
+'''
+        return getDeclarationString(self, 'Enum', header, classes, protocols, isRootLevel)
 
-% for i in innerDecls:
-//
-${i}
-% endfor
-
-% for s in subDecls:
-//
-${s}
-% endfor
-}
-''')
-        ps = getIdlProtocols(protocols, self._inheritedTypes, 'EnumDefault')
-
-        for p in ps:
-            if hasattr(p, 'modifyEnum'): p.modifyEnum(self)
-
-        typeInheritances = sum([p.protocolEnum if hasattr(p, 'protocolEnum') else [] for p in ps], getNonIdlProtocols(protocols, self._inheritedTypes))
-
-        output = template.render(enum=self,
-                                 innerDecls=[indent(Template(e.enumTemplate).render(enum=self)) for e in ps if e.enumTemplate != None],
-                                 inheritances=': ' + ', '.join(typeInheritances) if len(typeInheritances) > 0 else '',
-                                 subDecls=map(lambda e: e.getDeclarationString(classes, protocols, False), self._substructure))
-        return indent(output, isRootLevel)
 
 class SwiftClass(SwiftVariableList):
     def __init__(self, name, decltype, variables, inheritedTypes, typealiases, annotations, substructure):
@@ -335,7 +368,7 @@ class SwiftClass(SwiftVariableList):
     def static(self): return 'static' if self._decltype == 'struct' else 'class'
 
     def getDeclarationString(self, classes, protocols, isRootLevel = True):
-        template = Template('''
+        header = '''
 public ${clazz.decltype} ${clazz.name}${inheritances} {
     % for a in clazz.typealiases:
     public typealias ${a.name} = ${a.assignment}
@@ -343,43 +376,8 @@ public ${clazz.decltype} ${clazz.name}${inheritances} {
     % for v in clazz.variables:
     ${v.parsedDeclarationWithoutDefaultValue}
     % endfor
-
-% for i in innerDecls:
-//
-${i}
-% endfor
-
-% for s in subDecls:
-//
-${s}
-% endfor
-}
-% for i in outerDecls:
-//
-${i}
-//
-% endfor
-''')
-        ps = getIdlProtocols(protocols, self.inheritedTypes, 'ClassDefault')
-        for p in ps:
-            if hasattr(p, 'modifyClass'): p.modifyClass(self)
-
-        typeInheritances = sum([p.protocolClass if hasattr(p, 'protocolClass') else [] for p in ps], getNonIdlProtocols(protocols, self.inheritedTypes))
-
-        templates = [e.classTemplates for e in ps]
-        tupledTemplates = [e if type(e) == tuple else (e, None) for e in templates if e]
-        innerTemplates, outerTemplates = zip(*tupledTemplates) if len(tupledTemplates) > 0 else ([], []) # unzip
-
-        templateParams = {
-            'classes': classes,
-            'clazz': self,
-        }
-        output = template.render(clazz=self,
-                                 innerDecls=[indent(Template(e).render(**templateParams)) for e in innerTemplates],
-                                 outerDecls=[Template(e).render(**templateParams) for e in outerTemplates if e],
-                                 inheritances=': ' + ', '.join(typeInheritances) if len(typeInheritances) > 0 else '',
-                                 subDecls=map(lambda e: e.getDeclarationString(classes, protocols, False), self._substructure))
-        return indent(output, isRootLevel)
+'''
+        return getDeclarationString(self, 'Class', header, classes, protocols, isRootLevel)
 
 
 ### Parsing functions
@@ -748,6 +746,30 @@ public init(${p}) {
 '''
 
 
+class Equatable():
+    @property
+    def protocolClass(self): return ['Equatable']
+
+    @property
+    def protocolEnum(self): return ['Equatable']
+
+    @property
+    def enumTemplates(self):
+        return '''
+'''
+
+    @property
+    def classTemplates(self):
+        return '', '''
+<%
+    p = ' &&\\n\t\t'.join(['lhs.' + v.name + ' == rhs.' + v.name for v in clazz.variables])
+%>
+public func == (lhs: ${clazz.name}, rhs: ${clazz.name}) -> Bool {
+    return ${p}
+}
+'''
+
+
 class JSONDecodable():
     @property
     def protocolClass(self): return ['JSONDecodable']
@@ -800,7 +822,7 @@ public ${clazz.static} func parseJSON(data: AnyObject) throws -> ${clazz.name} {
 '''
 
     @property
-    def enumTemplate(self):
+    def enumTemplates(self):
         return '''
 public static func parseJSON(data: AnyObject) throws -> ${enum.name} {
 % if enum.isRawStyle:
@@ -862,7 +884,7 @@ public func toJSON() -> [String: AnyObject] {
 '''
 
     @property
-    def enumTemplate(self):
+    def enumTemplates(self):
         return '''
 public func toJSON() -> ${enum.inheritedTypes[0]} {
     return rawValue
@@ -923,7 +945,7 @@ class ErrorType():
     def protocolEnum(self): return ['ErrorType']
 
     @property
-    def enumTemplate(self): return None
+    def enumTemplates(self): return None
 
 
 class NSCoding():
@@ -990,7 +1012,7 @@ public var description: String {
 '''
 
     @property
-    def enumTemplate(self):
+    def enumTemplates(self):
         if swiftEnum.isRawStyle:
             return 'public var description: String { return rawValue }'
 
@@ -1011,7 +1033,7 @@ public var description: String {
 
 class EnumStaticInit():
     @property
-    def enumTemplate(self):
+    def enumTemplates(self):
         if swiftEnum.isRawStyle:
             return None # FIXME
         else:
@@ -1032,7 +1054,7 @@ public static func make${case._label}(${params}) -> ${enum.name} {
 
 class URLRequestHelper():
     @property
-    def enumTemplate(self):
+    def enumTemplates(self):
         if swiftEnum.isRawStyle:
             return None # FIXME
         else:
@@ -1158,7 +1180,7 @@ class WSHelper():
                 c._variables = [SwiftTupleVariable(None, anon.typename, 0)]
 
     @property
-    def enumTemplate(self):
+    def enumTemplates(self):
         return '''
 
 static func parse(type: String, data:[String:AnyObject]) throws -> ${enum.name}? {
