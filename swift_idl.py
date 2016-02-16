@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 from mako.template import Template
+from mako import exceptions
 
 PROGRAM_NAME='swift-idl'
 SOURCEKITTEN='sourceKitten'
@@ -290,11 +291,19 @@ ${i}
     templates = [callattrif(p, clazzOrEnumString.lower() + 'Templates', isRawStyle) for p in ps]
     tupledTemplates = [e if type(e) == tuple else (e, None) for e in templates if e]
     innerTemplates, outerTemplates = zip(*tupledTemplates) if len(tupledTemplates) > 0 else ([], []) # unzip
+
+    try:
+        innerDecls = [indent(Template(e).render(**subTemplateParams)) for e in innerTemplates]
+        outerDecls = [Template(e).render(**subTemplateParams) for e in outerTemplates if e]
+    except:
+        print(exceptions.html_error_template().render(css=False, full=False))
+        exit(1)
+
     typeInheritances = sum([getattrif(p, 'protocol' + clazzOrEnumString, []) for p in ps], getNonIdlProtocols(protocols, clazzOrEnum.inheritedTypes))
     templateParams = {
         'clazz' if clazzOrEnumString == 'Class' else 'enum': clazzOrEnum,
-        'innerDecls': [indent(Template(e).render(**subTemplateParams)) for e in innerTemplates],
-        'outerDecls': [Template(e).render(**subTemplateParams) for e in outerTemplates if e],
+        'innerDecls': innerDecls,
+        'outerDecls': outerDecls,
         'inheritances': ': ' + ', '.join(typeInheritances) if len(typeInheritances) > 0 else '',
         'subDecls': map(lambda e: e.getDeclarationString(classes, protocols, False), clazzOrEnum._substructure)
     }
