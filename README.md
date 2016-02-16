@@ -9,6 +9,7 @@ Swift-IDL can generate Swift source code adding some functionality from inherite
 * `ClassInit` (memberwise initializer for class and struct)
 * `Printable` (generates `CustomStringConvertible`)
 * `URLRequestHelper`
+* `Lensy` (Lensy API for [Lensy](https://github.com/safx/Lensy))
 * `APIKitHelper` (REST API Helper for [APIKit](https://github.com/ishkawa/APIKit))
 * `WSHelper` (WebSocket helper for [Starscream](https://github.com/daltoniam/starscream))
 * `EnumStaticInit` (case-wise initializer for enum) (WIP, maybe dropped)
@@ -37,7 +38,8 @@ All available protocols are declared in IDLProtocols.swift.
 `swift-idl.py --help` will show the usage text.
 
 ```sh
-usage: swift-idl.py [-h] [-o OUTPUT_DIR] [-f] [project] [scheme]
+usage: swift_idl.py [-h] [-s SOURCEKITTEN] [-o OUTPUT_DIR] [-f]
+                    [project] [scheme]
 
 swift-idl: Swift source generator from Swift
 
@@ -47,6 +49,8 @@ positional arguments:
 
 optional arguments:
   -h, --help            show this help message and exit
+  -s SOURCEKITTEN, --sourcekitten SOURCEKITTEN
+                        path to sourcekitten
   -o OUTPUT_DIR, --output_dir OUTPUT_DIR
                         directory to output
   -f, --force           force to output
