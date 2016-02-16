@@ -859,6 +859,13 @@ public ${clazz.static} func parseJSON(data: AnyObject) throws -> ${clazz.name} {
 }
 '''
 
+    def modifyEnum(self, swiftEnum):
+        for case in swiftEnum.cases:
+            for v in case.variables:
+                if v.name == None:
+                    print('JSON Error: case "%s" of enum "%s" has unnamed tuple' % (case.name, swiftEnum.name))
+                    exit(1)
+
     def enumTemplates(self, _):
         return '''
 public static func parseJSON(data: AnyObject) throws -> ${enum.name} {
@@ -868,7 +875,7 @@ public static func parseJSON(data: AnyObject) throws -> ${enum.name} {
     }
 % else:
 % for case in enum.cases:
-    if let obj: AnyObject = data["${case._label}"] {
+    if let obj: AnyObject = data["${case.name}"] {
         % for v in case.variables:
         let ${v.name}: ${v.typename}
         if let vo = obj["${v.keyname}"], v = vo {
@@ -883,9 +890,9 @@ public static func parseJSON(data: AnyObject) throws -> ${enum.name} {
         % endfor
         //
         <%
-            init = ', '.join([(v.name + ': ' + v.name) if v.name else v.name for v in case.variables])
+            init = ', '.join([(v.name + ': ' + v.name) for v in case.variables])
         %>
-        return .${case._label}(${init})
+        return .${case.name}(${init})
     }
 % endfor
 % endif
@@ -920,6 +927,7 @@ public func toJSON() -> [String: AnyObject] {
 '''
 
     def enumTemplates(self, _):
+        # FIXME: rawType only supproted
         return '''
 public func toJSON() -> ${enum.inheritedTypes[0]} {
     return rawValue
@@ -1043,7 +1051,7 @@ public var description: String {
 '''
 
     def enumTemplates(self, isRawStyle):
-        if isRawStyle:
+        if isRawStyle: # FIXME
             return 'public var description: String { return rawValue }'
 
         return '''
@@ -1073,8 +1081,8 @@ class EnumStaticInit():
     params = ", ".join(ais)
     out    = '(' + ', '.join(cis) + ')' if len(cis) > 0 else ''
 %>
-public static func make${case._label}(${params}) -> ${enum.name} {
-    return .${case._label}${out}
+public static func make${case.name}(${params}) -> ${enum.name} {
+    return .${case.name}${out}
 }
 % endfor
 '''
@@ -1090,7 +1098,7 @@ public var method: String {
     switch self {
     % for case in enum.cases:
     <% an = case.annotation('router') %>
-    case .${case._label}: return "${an.method}"
+    case .${case.name}: return "${an.method}"
     % endfor
     }
 }
@@ -1099,7 +1107,7 @@ public var path: String {
     switch self {
     % for case in enum.cases:
     <% an = case.annotation('router') %>
-    case .${case._label}${an.casePathString}: return "${an.path}"
+    case .${case.name}${an.casePathString}: return "${an.path}"
     % endfor
     }
 }
@@ -1127,7 +1135,7 @@ public var params: [String: AnyObject] {
         params = ['_ = %s.map { p["%s"] = $0.toJSON() }' % (i._name, i._name) for i in dicx if i._isOptional]
     %>
     % if len(diff) > 0:
-    case .${case._label}${letString}:
+    case .${case.name}${letString}:
         % if len(params) > 0:
         var p: [String: AnyObject] = [${initStr}]
         % for p in params:
