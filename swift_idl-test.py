@@ -101,22 +101,12 @@ struct Foo: JSONDecodable { // sample:"foo,,bar"
 
 
 class SampleStructTest(unittest.TestCase):
-    def test_getLinenumberFunction(self):
-        f = IDL.getLinenumberFunction(test_source)
-        self.assertEqual(7, f(len(test_source) - 1))
-
-    def test_getOmittedTokens(self):
-        tk = IDL.getOmittedTokens(test_syntax, test_source)
-        self.assertEqual(' ', tk[0].content)
-        self.assertEqual(1, tk[0].line)
-        self.assertEqual('}\n', tk[-1].content)
-        self.assertEqual(7, tk[-1].line)
-
     def test_getSwiftTokens(self):
         tk = IDL.getSwiftTokens(test_syntax, test_source)
         self.assertEqual('import', tk[0].content)
         self.assertEqual(1, tk[0].line)
         self.assertEqual('source.lang.swift.syntaxtype.keyword', tk[0].tokenType)
+
         self.assertEqual('}\n', tk[-1].content)
         self.assertEqual(7, tk[-1].line)
         self.assertEqual('omittedtoken', tk[-1].tokenType)
