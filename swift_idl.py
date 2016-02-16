@@ -158,6 +158,9 @@ class SwiftTupleVariable(SwiftVariableBase):
         self._positon = position
 
     @property
+    def positon(self): return self._positon
+
+    @property
     def varname(self):
         return self._name if self._name else 'v' + str(self._positon)
 
@@ -287,7 +290,8 @@ ${i}
         'clazz' if clazzOrEnumString == 'Class' else 'enum': clazzOrEnum
     }
 
-    isRawStyle = getattrif(clazzOrEnum, 'isRawStyle', False)
+    isRawStyle = getattrif(clazzOrEnum, 'isRawStyle', False) # FIXME
+
     templates = [callattrif(p, clazzOrEnumString.lower() + 'Templates', isRawStyle) for p in ps]
     tupledTemplates = [e if type(e) == tuple else (e, None) for e in templates if e]
     innerTemplates, outerTemplates = zip(*tupledTemplates) if len(tupledTemplates) > 0 else ([], []) # unzip
@@ -305,7 +309,7 @@ ${i}
         'innerDecls': innerDecls,
         'outerDecls': outerDecls,
         'inheritances': ': ' + ', '.join(typeInheritances) if len(typeInheritances) > 0 else '',
-        'subDecls': map(lambda e: e.getDeclarationString(classes, protocols, False), clazzOrEnum._substructure)
+        'subDecls': map(lambda e: e.getDeclarationString(classes, protocols, False), clazzOrEnum.substructure)
     }
     output = template.render(**templateParams)
     return indent(output, isRootLevel)
@@ -329,6 +333,9 @@ class SwiftEnum(object):
 
     @property
     def annotations(self): return self._annotations
+
+    @property
+    def substructure(self): return self._substructure
 
     @property
     def isRawStyle(self):
@@ -373,6 +380,9 @@ class SwiftClass(SwiftVariableList):
 
     @property
     def typealiases(self): return self._typealiases
+
+    @property
+    def substructure(self): return self._substructure
 
     @property
     def static(self): return 'static' if self._decltype == 'struct' else 'class'
@@ -775,7 +785,7 @@ public func == (lhs: ${enum.name}, rhs: ${enum.name}) -> Bool {
         elif len(case.variables) == 1:
             av  = 'l == r'
         else:
-            av  = ' && '.join(['l.%s == r.%s' % (v.name, v.name) if v.name else 'l.%d == r.%d' % (v._positon, v._positon) for v in case.variables])
+            av  = ' && '.join(['l.%s == r.%s' % (v.name, v.name) if v.name else 'l.%d == r.%d' % (v.positon, v.positon) for v in case.variables])
     %>
     % if len(case.variables) == 0:
     case (.${case.name}, .${case.name}): return ${av}
