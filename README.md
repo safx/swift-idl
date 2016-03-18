@@ -20,7 +20,7 @@ All available protocols are declared in IDLProtocols.swift.
 ## Requirements
 
 * mako (`pip install mako`)
-* SourceKitten (Use `brew install SourceKitten`)
+* SourceKitten (required: 0.11.0 or more)
 * Xcode 7 (Set as default to use `xcode-select -s`)
 
 ## Up and Running

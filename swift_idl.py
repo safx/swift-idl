@@ -1253,7 +1253,7 @@ def execSourcekitten(args):
     return json.loads(out)
 
 def sourcekittenDoc(project, scheme):
-    return execSourcekitten(['doc', '-project', project, '-scheme', scheme])
+    return execSourcekitten(['doc', '--', '-project', project, '-scheme', scheme])
 
 def sourcekittenSyntax(filepath):
     return execSourcekitten(['syntax', '--file', filepath])
