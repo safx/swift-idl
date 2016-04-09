@@ -28,6 +28,8 @@ def mergeObject(arr):
             value = obj.get(key, set([ST_NONE]))
             if type(value) == dict:
                 merged[key] = value
+            elif type(value) == list:
+                merged[key] = mergeObject(value)
             elif key in merged:
                 merged[key] = merged[key].union(value)
             else:
@@ -43,7 +45,7 @@ def gatherInfoJSONArray(json):
     if all([type(i) == dict for i in arr]):
         return mergeObject(arr)
     assert(False)
-    return arr
+    return arr # Unexpected return
 
 
 def gatherInfoJSONObject(json):
@@ -58,10 +60,13 @@ def gatherInfoJSONObject(json):
     return info
 
 
-def toCamelCase(name, convertFirstLetter=True):
+def toCamelCase(name, firstLetterUpper=True):
     ts = re.split('[-_/]', name)
-    ret = ''.join([e.capitalize() for e in ts])
-    return ret if convertFirstLetter else name[0].lower() + ret[1:]
+    if len(ts) > 1:
+        ret = ''.join([e.capitalize() for e in ts])
+    else:
+        ret = name
+    return (unicode.upper if firstLetterUpper else unicode.lower)(ret[0]) + ret[1:]
 
 
 def guessTypename(v):
