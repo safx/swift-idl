@@ -959,7 +959,7 @@ public static var $: ${clazz.name}LensHelper<${clazz.name}> {
    allLenses = [e.name for e in classes if 'Lensy' in e.inheritedTypes]
 %>
 public struct ${clazz.name}LensHelper<Whole>: LensHelperType {
-    public typealias Part = ${clazz.name}
+    public assciatedtype Part = ${clazz.name}
     public let lens: Lens<Whole, Part>
     public init(lens: Lens<Whole, Part>) {
         self.init(lens: lens)

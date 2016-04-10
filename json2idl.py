@@ -20,41 +20,42 @@ ST_FLOAT  = 5
 ST_URL    = 6
 ST_ANYOBJECT = 999
 
-def mergeObject(arr):
-    keys = reduce(lambda a, e: a.union(set(e.keys())), arr, set())
+def mergeIntoSingleObject(guessedObjectArray):
+    keys = reduce(lambda a, e: a.union(set(e.keys())), guessedObjectArray, set())
     merged = {}
-    for obj in arr:
+    for obj in guessedObjectArray:
         for key in keys:
             value = obj.get(key, set([ST_NONE]))
             if type(value) == dict:
                 merged[key] = value
             elif type(value) == list:
-                merged[key] = mergeObject(value)
+                merged[key] = mergeIntoSingleObject(value)
             elif key in merged:
                 merged[key] = merged[key].union(value)
             else:
                 merged[key] = value
     return [merged]
 
-def gatherInfoJSONArray(json):
+def guessTypenameForArray(json):
     arr = []
     for value in json:
         if type(value) == dict:
-            arr.append(gatherInfoJSONObject(value))
+            arr.append(guessTypenameForDict(value))
 
     if all([type(i) == dict for i in arr]):
-        return mergeObject(arr)
+        return mergeIntoSingleObject(arr)
+
     assert(False)
     return arr # Unexpected return
 
 
-def gatherInfoJSONObject(json):
+def guessTypenameForDict(json):
     info = {}
     for key, value in json.iteritems():
         if type(value) == dict:
-            info[key] = gatherInfoJSONObject(value)
+            info[key] = guessTypenameForDict(value)
         elif type(value) == list:
-            info[key] = gatherInfoJSONArray(value)
+            info[key] = guessTypenameForArray(value)
         else:
             info[key] = set([guessTypename(value)])
     return info
@@ -170,7 +171,7 @@ def execute():
     obj = json.loads(args.jsonfile.read())
     args.jsonfile.close()
 
-    info = gatherInfoJSONObject(obj)
+    info = guessTypenameForDict(obj)
     typename = resolveStructName(args)
 
     if args.apikit:
