@@ -12,7 +12,7 @@ import APIKit
 public protocol APIKitRequest: Request {
     associatedtype APIKitResponse
     associatedtype Response = APIKitResponse
-    //associatedtype Response = Result<APIKitResponse>
+    //typealias Response = Result<APIKitResponse>
 }
 
 /*
@@ -22,12 +22,12 @@ extension APIKitRequest {
 */
 
 extension APIKitRequest where Self.Response: JSONDecodable, Self.Response == Self.Response.DecodedType {
-    public func responseFromObject(object: AnyObject, URLResponse: NSHTTPURLResponse) -> Response? {
+    public func responseFromObject(_ object: AnyObject, URLResponse: HTTPURLResponse) throws -> Response {
         do {
             return try Response.parseJSON(object)
         } catch {
             print(error)
+            throw ResponseError.UnexpectedObject(object)
         }
-        return nil
     }
 }
