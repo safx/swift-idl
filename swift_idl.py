@@ -338,6 +338,9 @@ class SwiftEnum(object):
     def substructure(self): return self._substructure
 
     @property
+    def isEnum(self): return True
+
+    @property
     def isRawStyle(self):
         if len(self._inheritedTypes) > 0:
             n = self._inheritedTypes[0]
@@ -383,6 +386,9 @@ class SwiftClass(SwiftVariableList):
 
     @property
     def substructure(self): return self._substructure
+
+    @property
+    def isEnum(self): return False
 
     @property
     def static(self): return 'static' if self._decltype == 'struct' else 'class'
@@ -812,8 +818,40 @@ public func == (lhs: ${clazz.name}, rhs: ${clazz.name}) -> Bool {
 }
 '''
 
+class Decodable():
+    @property
+    def protocolClass(self): return ['Decodable']
 
-class JSONDecodable():
+    @property
+    def protocolEnum(self): return ['Decodable']
+
+    def classTemplates(self, _):
+        return '''
+<%
+    hasOmitValues   = any(map(lambda v: v.annotation('json').isOmitValue        , clazz.variables))
+    hasRenameValues = any(map(lambda v: v.annotation('json').jsonLabel != v.name, clazz.variables))
+%>
+% if hasOmitValues or hasRenameValues:
+private enum CodingKeys: String, CodingKey {
+% for v in clazz.variables:
+    <%
+        an = v.annotation('json')
+    %>
+    % if not an.isOmitValue:
+    % if v.name == an.jsonLabel:
+    case ${v.name}
+    % else:
+    case ${v.name} = "${an.jsonLabel}"
+    % endif
+    % endif
+% endfor
+}
+% endif
+'''
+
+
+
+class JSONDecodable(): # deprecated in Swift 4
     @property
     def protocolClass(self): return ['JSONDecodable']
 
@@ -905,7 +943,7 @@ public static func parse(with JSONObject: Any) throws -> ${enum.name} {
 '''
 
 
-class JSONEncodable():
+class JSONEncodable(): # deprecated in Swift 4
     @property
     def protocolClass(self): return ['JSONEncodable']
 
@@ -993,7 +1031,7 @@ class ErrorType():
     def enumTemplates(self, _): return None
 
 
-class NSCoding():
+class NSCoding(): # deprecated in Swift 4
     @property
     def protocolClass(self): return ['NSCoding']
 
@@ -1160,9 +1198,17 @@ public var params: [String: AnyObject] {
 class APIKitHelper():
     def modifyClass(self, swiftClass):
         # add typealias Response
-        if len([e for e in swiftClass.typealiases if e.name == 'APIKitResponse']) == 0:
-            swiftClass.typealiases.append(SwiftTypealias('APIKitResponse', swiftClass.name + 'Response'))
-            swiftClass.typealiases.append(SwiftTypealias('Response', swiftClass.name + 'Response'))
+        ts = [e for e in swiftClass.typealiases if e.name == 'APIKitResponse']
+        ar = None
+        if len(ts) == 0:
+            ar = SwiftTypealias('APIKitResponse', swiftClass.name + 'Response')
+            swiftClass.typealiases.append(ar)
+        else:
+            ar = ts[0]
+
+        rs = [e for e in swiftClass.typealiases if e.name == 'Response']
+        if len(rs) == 0:
+            swiftClass.typealiases.append(SwiftTypealias('Response', ar.assignment))
 
     def classTemplates(self, _):
         return '''
@@ -1178,9 +1224,24 @@ public var path: String {
 }
 //
     <%
-        def toJsonString(info):
-             if info.isArray: return info.name + '.map { $0.toJSON() } as AnyObject'
-             return info.name + '.toJSON() as AnyObject'
+        def makeAssignParamStatement(variable, classes, variable_name = '$0'):
+            found = [e for e in classes if e.name == variable.baseTypename]
+            if len(found) == 0:
+                return variable_name + ' as AnyObject'
+            else:
+                assert(len(found) == 1)
+                typeOrEnum = found[0]
+                if typeOrEnum.isEnum:
+                    if typeOrEnum.isRawStyle:
+                        return variable_name + '.rawValue as AnyObject'
+                    else:
+                        return '/* FIXME: not raw enum */'
+                else:
+                    return '/* FIXME: not enum */'
+
+        def toJsonString(variable, classes):
+             if variable.isArray: return variable.name + '.map { ' + makeAssignParamStatement(variable, classes) + ' } as AnyObject'
+             return makeAssignParamStatement(variable, classes, variable.name)
 
         pathParams, params = an.paramSets()
         diff = set(params).difference(set(pathParams))
@@ -1191,10 +1252,10 @@ public var path: String {
         dicx = [i for i in clazz.variables if i.name in diff]
 
         # FIXME: use annotation('route') insteadof annotation('json')
-        inits   = ['"%s": %s' % (i.annotation('json').jsonLabel, toJsonString(i)) for i in dicx if not i.isOptional]
+        inits   = ['"%s": %s' % (i.annotation('json').jsonLabel, toJsonString(i, classes)) for i in dicx if not i.isOptional]
         initStr = ', '.join(inits) if len(inits) else ':'
 
-        params = ['_ = %s.map { p["%s"] = $0.toJSON() as AnyObject }' % (i.name, i.annotation('json').jsonLabel) for i in dicx if i.isOptional]
+        params = ['_ = %s.map { p["%s"] = %s }' % (i.name, i.annotation('json').jsonLabel, makeAssignParamStatement(i, classes)) for i in dicx if i.isOptional]
     %>
 % if len(params) > 0 or len(inits) > 0:
 public var parameters: Any? {
