@@ -29,7 +29,6 @@ public struct NullDataParser: DataParser {
 
 extension APIKitRequest where Self.Response: Decodable {
     public typealias DataParser = NullDataParser
-    typealias Response = APIKitResponse
 
     public var dataParser: DataParser {
         return NullDataParser()
@@ -41,30 +40,35 @@ extension APIKitRequest where Self.Response: Decodable {
         do {
             return try decoder.decode(Self.Response.self, from: object as! Data) // FIXME
         } catch DecodingError.typeMismatch(let dataType, let context) {
-            print("typeMismatch")
+            print("DecodingError.typeMismatch")
             print("  type:", dataType)
             print("  desc:", context.debugDescription)
-            print("  ctx :", context.codingPath.map{$0?.stringValue})
-            throw ResponseError.unexpectedObject((context, dataType))
+            print("  ctx :", context.codingPath.map{$0.stringValue})
+            print("  data: ", String.init(data: object as! Data, encoding: String.Encoding.utf8))
+             throw ResponseError.unexpectedObject((context, dataType))
         } catch DecodingError.valueNotFound(let dataType, let context) {
-            print("valueNotFound")
+            print("DecodingError.valueNotFound")
             print("  type:", dataType)
             print("  desc:", context.debugDescription)
-            print("  ctx :", context.codingPath.map{$0?.stringValue})
+            print("  ctx :", context.codingPath.map{$0.stringValue})
+            print("  data: ", String.init(data: object as! Data, encoding: String.Encoding.utf8))
             throw ResponseError.unexpectedObject((context, dataType))
         } catch DecodingError.keyNotFound(let codingPath, let context) {
-            print("keyNotFound")
+            print("DecodingError.keyNotFound")
             print("  type:", codingPath)
             print("  desc:", context.debugDescription)
-            print("  ctx :", context.codingPath.map{$0?.stringValue})
+            print("  ctx :", context.codingPath.map{$0.stringValue})
+            print("  data: ", String.init(data: object as! Data, encoding: String.Encoding.utf8))
             throw ResponseError.unexpectedObject((context, codingPath))
         } catch DecodingError.dataCorrupted(let context) {
-            print("dataCorrupted")
+            print("DecodingError.dataCorrupted")
             print("  desc:", context.debugDescription)
-            print("  ctx :", context.codingPath.map{$0?.stringValue})
+            print("  ctx :", context.codingPath.map{$0.stringValue})
+            print("  data: ", String.init(data: object as! Data, encoding: String.Encoding.utf8))
             throw ResponseError.unexpectedObject(context)
         } catch let error {
             print("Other Error", error)
+            print("  data: ", String.init(data: object as! Data, encoding: String.Encoding.utf8))
             throw ResponseError.unexpectedObject(error)
         }
     }

@@ -4,8 +4,8 @@ Swift-IDL generates Swift source from Swift source.
 
 Swift-IDL can generate Swift source code adding some functionality from inherited *peseudo* protocols as follows:
 
-* `JSONEncodable`
-* `JSONDecodable`
+* `Encodable`
+* `Decodable`
 * `ClassInit` (memberwise initializer for class and struct)
 * `Printable` (generates `CustomStringConvertible`)
 * `URLRequestHelper`
@@ -13,7 +13,6 @@ Swift-IDL can generate Swift source code adding some functionality from inherite
 * `APIKitHelper` (REST API Helper for [APIKit](https://github.com/ishkawa/APIKit))
 * `WSHelper` (WebSocket helper for [Starscream](https://github.com/daltoniam/starscream))
 * `EnumStaticInit` (case-wise initializer for enum) (WIP, maybe dropped)
-* `NSCoding` (WIP, maybe dropped)
 
 All available protocols are declared in IDLProtocols.swift.
 
@@ -59,46 +58,9 @@ optional arguments:
 
 ## IDL Protocols
 
-### JSONDecodable
+### Decodable
 
-```swift
-struct User: JSONDecodable {
-    let id: String      // json:"ID"
-    let name: String
-    let isAdmin: Bool   // json:"is_admin"
-    let isChanged: Bool // json:"-"
-}
-```
-
-You can customize output by using annotation 'json'.
-
-`JSONDecodable` is a protocol:
-
-```swift
-public protocol JSONDecodable {
-    static func parseJSON(data: AnyObject) throws -> Self
-}
-```
-
-You can customize decoding to declare extension for some type.
-```swift
-extension NSDate: JSONDecodable {
-    public static func parseJSON(data: AnyObject) throws -> NSDate {
-        if let v = data as? String {
-            let dateFormatter = NSDateFormatter()
-            dateFormatter.dateFormat = "yyyy/MM/dd hh:mm"
-            if let newDate = dateFormatter.dateFromString(v) {
-                return newDate
-            }
-        }
-        throw JSONDecodeError.ValueTranslationFailed(type: "NSDate")
-    }
-}
-```
-
-### JSONEncodable
-
-You can customize output by using annotation 'json'.
+### Encodable
 
 ### APIKitHelper
 

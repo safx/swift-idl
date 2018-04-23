@@ -849,134 +849,6 @@ private enum CodingKeys: String, CodingKey {
 % endif
 '''
 
-
-
-class JSONDecodable(): # deprecated in Swift 4
-    @property
-    def protocolClass(self): return ['JSONDecodable']
-
-    @property
-    def protocolEnum(self): return ['JSONDecodable']
-
-    def classTemplates(self, _):
-        return '''
-public ${clazz.static} func parse(with JSONObject: Any) throws -> ${clazz.name} {
-    guard let dic = JSONObject as? Dictionary<String, AnyObject> else {
-        throw JSONDecodeError.typeMismatch(key: "(GetTeamsResponse)", object: JSONObject, expected: Dictionary<String, AnyObject>.self, actual: type(of: JSONObject))
-    }
-    % for v in clazz.variables:
-    <%
-        an = v.annotation('json')
-        parse = 'parseAsArrayForNullable' if v.isArrayOfOptional else 'parseAsArray'
-    %>
-    //
-    % if not an.isOmitValue:
-    let ${v.name}: ${v.typename}
-    if let v: AnyObject = dic["${an.jsonLabel}"] {
-        if v is NSNull {
-        % if v.hasDefaultValue:
-            ${v.name} = ${v.defaultValue}
-        % else:
-            throw JSONDecodeError.nonNullable(key: "${an.jsonLabel}", object: JSONObject)
-        % endif
-        } else {
-            % if v.isArray:
-            ${v.name} = try ${v.baseTypename}.${parse}(with: v)
-            % else:
-            ${v.name} = try ${v.baseTypename}.parse(with: v)
-            % endif
-        }
-    } else {
-    % if v.hasDefaultValue:
-        ${v.name} = ${v.defaultValue}
-    % else:
-        throw JSONDecodeError.missingKey(key: "${an.jsonLabel}", object: JSONObject)
-    % endif
-    }
-    % endif
-    % endfor
-    //
-    <% jsonInits = ', '.join([v.name + ': ' + v.name for v in clazz.variables if not v.annotation('json').isOmitValue]) %>
-    return ${clazz.name}(${jsonInits})
-}
-'''
-
-    def modifyEnum(self, swiftEnum):
-        for case in swiftEnum.cases:
-            for v in case.variables:
-                if v.name == None:
-                    print('JSON Error: case "%s" of enum "%s" has unnamed tuple' % (case.name, swiftEnum.name))
-                    exit(1)
-
-    def enumTemplates(self, _):
-        return '''
-public static func parse(with JSONObject: Any) throws -> ${enum.name} {
-% if enum.isRawStyle:
-    if let v = JSONObject as? ${enum.inheritedTypes[0]}, let val = ${enum.name}(rawValue: v) {
-        return val
-    }
-% else:
-% for case in enum.cases:
-    if let obj: AnyObject = JSONObject["${case.name}"] {
-        % for v in case.variables:
-        let ${v.name}: ${v.typename}
-        if let vo = obj["${v.keyname}"], v = vo {
-            do {
-                ${v.name} = try ${v.typename}.parseJSON(v)
-            } catch JSONDecodeError.valueTranslationFailed {
-                throw JSONDecodeError.typeMismatch(key: "${v.keyname}", type: "${v.typename}")
-            }
-        } else {
-            throw JSONDecodeError.missingKey(key: "${v.keyname}", object: obj)
-        }
-        % endfor
-        //
-        <%
-            init = ', '.join([(v.name + ': ' + v.name) for v in case.variables])
-        %>
-        return .${case.name}(${init})
-    }
-% endfor
-% endif
-    throw JSONDecodeError.valueTranslationFailed(type: ${enum.name}.self, object: JSONObject)
-}
-'''
-
-
-class JSONEncodable(): # deprecated in Swift 4
-    @property
-    def protocolClass(self): return ['JSONEncodable']
-
-    def classTemplates(self, _):
-        return '''
-public func toJSON() -> [String: AnyObject] {
-    return [
-    % for v in clazz.variables:
-    <% an = v.annotation('json') %>
-    % if an.isOmitValue:
-        <%doc>nohting</%doc>
-    % elif v.isArray:
-        <% z = '(' + v.name + ' ?? [])' if v.isOptional else v.name %>
-        "${an.jsonLabel}": ${z}.map { $0.toJSON() },
-    % elif v.isOptional:
-        "${an.jsonLabel}": ${v.name}.map { $0.toJSON() } ?? NSNull(),
-    %else:
-        "${an.jsonLabel}": ${v.name}.toJSON() as AnyObject,
-    % endif
-    % endfor
-    ]
-}
-'''
-
-    def enumTemplates(self, _):
-        # FIXME: rawType only supproted
-        return '''
-public func toJSON() -> ${enum.inheritedTypes[0]} {
-    return rawValue
-}
-'''
-
-
 class Lensy():
     def classTemplates(self, _):
         templateInner = '''
@@ -1029,49 +901,6 @@ class ErrorType():
     def protocolEnum(self): return ['ErrorType']
 
     def enumTemplates(self, _): return None
-
-
-class NSCoding(): # deprecated in Swift 4
-    @property
-    def protocolClass(self): return ['NSCoding']
-
-    def classTemplates(self, _):
-        return '''
-required public init?(coder: NSCoder) {
-    var failed = false
-
-% for v in clazz.variables:
-% if v.typename == 'Int':
-    ${v.name} = coder.decodeInteger(forKey: "${v.name}")
-% elif v.typename == 'Float':
-    ${v.name} = coder.decodeFloat(forKey: "${v.name}")
-% else:
-    if let ${v.name} = coder.decodeObject(forKey: "${v.name}") as? ${v.typename} {
-        self.${v.name} = ${v.name}
-    } else {
-        self.${v.name} = ${v.typename}()  // FIXME: set default value
-        failed = true
-    }
-% endif
-% endfor
-
-    if failed {
-        return // nil
-    }
-}
-//
-public func encode(with coder: NSCoder) {
-% for v in clazz.variables:
-% if v.typename == 'Int':
-    coder.encode(${v.name}, forKey: "${v.name}")
-% elif v.typename == 'Float':
-    coder.encode(${v.name}, forKey: "${v.name}")
-% else:
-    coder.encode(${v.name}, forKey: "${v.name}")
-% endif
-% endfor
-}
-'''
 
 
 class Printable():
@@ -1282,17 +1111,34 @@ class WSHelper():
 
     def enumTemplates(self, _):
         return '''
-
-static func parse(type: String, data: [String:AnyObject]) throws -> ${enum.name}? {
-    % for case in enum.cases:
-    <% an = case.annotation('ws') %>
-    % if not an.isOmitValue:
-    <%
-        name = case.variables[0].typename
-    %>
-    if type == "${an.name}" { return .${case.name}(try ${name}.parse(with: data)) }
-    % endif
-    % endfor
+fileprivate struct WSEventTypeChecker: Decodable {
+    let type: String
+}
+//
+fileprivate struct WSEvent<T: Decodable>: Decodable {
+    let type: String
+    let data: T
+}
+//
+static func parse(data: Data) throws -> ${enum.name}? {
+    let decoder = JSONDecoder()
+    if #available(OSX 10.12, iOS 10.0, *) {
+        decoder.dateDecodingStrategy = .iso8601
+    } else {
+        fatalError("Please use newer macOS")
+    }
+    if let eventType = try? decoder.decode(WSEventTypeChecker.self, from: data) {
+        let type = eventType.type
+        % for case in enum.cases:
+        <% an = case.annotation('ws') %>
+        % if not an.isOmitValue:
+        <%
+            name = case.variables[0].typename
+        %>
+        if type == "${an.name}" { let ev = try decoder.decode(WSEvent<${name}>.self, from: data); return .${case.name}(ev.data) }
+        % endif
+        % endfor
+    }
     return nil // FIXME
 }
 '''
