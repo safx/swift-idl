@@ -25,7 +25,7 @@ struct AnyCodingKeys: CodingKey {
 }
 
 
-enum JSON {
+public enum JSON {
     case null
     case boolean(Bool)
     case number(Double)
@@ -36,7 +36,7 @@ enum JSON {
 
 
 extension JSON: Decodable {
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         if let container = try? decoder.container(keyedBy: AnyCodingKeys.self) {
             self = JSON(from: container)
         } else if let container = try? decoder.unkeyedContainer() {
@@ -87,7 +87,7 @@ extension JSON: Decodable {
 
 extension JSON: Encodable {
 
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         switch self {
         case let .array(array):
