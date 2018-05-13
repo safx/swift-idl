@@ -338,6 +338,9 @@ class SwiftEnum(object):
     def substructure(self): return self._substructure
 
     @property
+    def isEnum(self): return True
+
+    @property
     def isRawStyle(self):
         if len(self._inheritedTypes) > 0:
             n = self._inheritedTypes[0]
@@ -383,6 +386,9 @@ class SwiftClass(SwiftVariableList):
 
     @property
     def substructure(self): return self._substructure
+
+    @property
+    def isEnum(self): return False
 
     @property
     def static(self): return 'static' if self._decltype == 'struct' else 'class'
@@ -812,132 +818,36 @@ public func == (lhs: ${clazz.name}, rhs: ${clazz.name}) -> Bool {
 }
 '''
 
-
-class JSONDecodable():
+class Decodable():
     @property
-    def protocolClass(self): return ['JSONDecodable']
+    def protocolClass(self): return ['Decodable']
 
     @property
-    def protocolEnum(self): return ['JSONDecodable']
+    def protocolEnum(self): return ['Decodable']
 
     def classTemplates(self, _):
         return '''
-public ${clazz.static} func parse(with JSONObject: Any) throws -> ${clazz.name} {
-    guard let dic = JSONObject as? Dictionary<String, AnyObject> else {
-        throw JSONDecodeError.typeMismatch(key: "(GetTeamsResponse)", object: JSONObject, expected: Dictionary<String, AnyObject>.self, actual: type(of: JSONObject))
-    }
-    % for v in clazz.variables:
+<%
+    hasOmitValues   = any(map(lambda v: v.annotation('json').isOmitValue        , clazz.variables))
+    hasRenameValues = any(map(lambda v: v.annotation('json').jsonLabel != v.name, clazz.variables))
+%>
+% if hasOmitValues or hasRenameValues:
+private enum CodingKeys: String, CodingKey {
+% for v in clazz.variables:
     <%
         an = v.annotation('json')
-        parse = 'parseAsArrayForNullable' if v.isArrayOfOptional else 'parseAsArray'
     %>
-    //
     % if not an.isOmitValue:
-    let ${v.name}: ${v.typename}
-    if let v: AnyObject = dic["${an.jsonLabel}"] {
-        if v is NSNull {
-        % if v.hasDefaultValue:
-            ${v.name} = ${v.defaultValue}
-        % else:
-            throw JSONDecodeError.nonNullable(key: "${an.jsonLabel}", object: JSONObject)
-        % endif
-        } else {
-            % if v.isArray:
-            ${v.name} = try ${v.baseTypename}.${parse}(with: v)
-            % else:
-            ${v.name} = try ${v.baseTypename}.parse(with: v)
-            % endif
-        }
-    } else {
-    % if v.hasDefaultValue:
-        ${v.name} = ${v.defaultValue}
+    % if v.name == an.jsonLabel:
+    case ${v.name}
     % else:
-        throw JSONDecodeError.missingKey(key: "${an.jsonLabel}", object: JSONObject)
+    case ${v.name} = "${an.jsonLabel}"
     % endif
-    }
     % endif
-    % endfor
-    //
-    <% jsonInits = ', '.join([v.name + ': ' + v.name for v in clazz.variables if not v.annotation('json').isOmitValue]) %>
-    return ${clazz.name}(${jsonInits})
-}
-'''
-
-    def modifyEnum(self, swiftEnum):
-        for case in swiftEnum.cases:
-            for v in case.variables:
-                if v.name == None:
-                    print('JSON Error: case "%s" of enum "%s" has unnamed tuple' % (case.name, swiftEnum.name))
-                    exit(1)
-
-    def enumTemplates(self, _):
-        return '''
-public static func parse(with JSONObject: Any) throws -> ${enum.name} {
-% if enum.isRawStyle:
-    if let v = JSONObject as? ${enum.inheritedTypes[0]}, let val = ${enum.name}(rawValue: v) {
-        return val
-    }
-% else:
-% for case in enum.cases:
-    if let obj: AnyObject = JSONObject["${case.name}"] {
-        % for v in case.variables:
-        let ${v.name}: ${v.typename}
-        if let vo = obj["${v.keyname}"], v = vo {
-            do {
-                ${v.name} = try ${v.typename}.parseJSON(v)
-            } catch JSONDecodeError.valueTranslationFailed {
-                throw JSONDecodeError.typeMismatch(key: "${v.keyname}", type: "${v.typename}")
-            }
-        } else {
-            throw JSONDecodeError.missingKey(key: "${v.keyname}", object: obj)
-        }
-        % endfor
-        //
-        <%
-            init = ', '.join([(v.name + ': ' + v.name) for v in case.variables])
-        %>
-        return .${case.name}(${init})
-    }
 % endfor
+}
 % endif
-    throw JSONDecodeError.valueTranslationFailed(type: ${enum.name}.self, object: JSONObject)
-}
 '''
-
-
-class JSONEncodable():
-    @property
-    def protocolClass(self): return ['JSONEncodable']
-
-    def classTemplates(self, _):
-        return '''
-public func toJSON() -> [String: AnyObject] {
-    return [
-    % for v in clazz.variables:
-    <% an = v.annotation('json') %>
-    % if an.isOmitValue:
-        <%doc>nohting</%doc>
-    % elif v.isArray:
-        <% z = '(' + v.name + ' ?? [])' if v.isOptional else v.name %>
-        "${an.jsonLabel}": ${z}.map { $0.toJSON() },
-    % elif v.isOptional:
-        "${an.jsonLabel}": ${v.name}.map { $0.toJSON() } ?? NSNull(),
-    %else:
-        "${an.jsonLabel}": ${v.name}.toJSON() as AnyObject,
-    % endif
-    % endfor
-    ]
-}
-'''
-
-    def enumTemplates(self, _):
-        # FIXME: rawType only supproted
-        return '''
-public func toJSON() -> ${enum.inheritedTypes[0]} {
-    return rawValue
-}
-'''
-
 
 class Lensy():
     def classTemplates(self, _):
@@ -991,49 +901,6 @@ class ErrorType():
     def protocolEnum(self): return ['ErrorType']
 
     def enumTemplates(self, _): return None
-
-
-class NSCoding():
-    @property
-    def protocolClass(self): return ['NSCoding']
-
-    def classTemplates(self, _):
-        return '''
-required public init?(coder: NSCoder) {
-    var failed = false
-
-% for v in clazz.variables:
-% if v.typename == 'Int':
-    ${v.name} = coder.decodeInteger(forKey: "${v.name}")
-% elif v.typename == 'Float':
-    ${v.name} = coder.decodeFloat(forKey: "${v.name}")
-% else:
-    if let ${v.name} = coder.decodeObject(forKey: "${v.name}") as? ${v.typename} {
-        self.${v.name} = ${v.name}
-    } else {
-        self.${v.name} = ${v.typename}()  // FIXME: set default value
-        failed = true
-    }
-% endif
-% endfor
-
-    if failed {
-        return // nil
-    }
-}
-//
-public func encode(with coder: NSCoder) {
-% for v in clazz.variables:
-% if v.typename == 'Int':
-    coder.encode(${v.name}, forKey: "${v.name}")
-% elif v.typename == 'Float':
-    coder.encode(${v.name}, forKey: "${v.name}")
-% else:
-    coder.encode(${v.name}, forKey: "${v.name}")
-% endif
-% endfor
-}
-'''
 
 
 class Printable():
@@ -1160,9 +1027,17 @@ public var params: [String: AnyObject] {
 class APIKitHelper():
     def modifyClass(self, swiftClass):
         # add typealias Response
-        if len([e for e in swiftClass.typealiases if e.name == 'APIKitResponse']) == 0:
-            swiftClass.typealiases.append(SwiftTypealias('APIKitResponse', swiftClass.name + 'Response'))
-            swiftClass.typealiases.append(SwiftTypealias('Response', swiftClass.name + 'Response'))
+        ts = [e for e in swiftClass.typealiases if e.name == 'APIKitResponse']
+        ar = None
+        if len(ts) == 0:
+            ar = SwiftTypealias('APIKitResponse', swiftClass.name + 'Response')
+            swiftClass.typealiases.append(ar)
+        else:
+            ar = ts[0]
+
+        rs = [e for e in swiftClass.typealiases if e.name == 'Response']
+        if len(rs) == 0:
+            swiftClass.typealiases.append(SwiftTypealias('Response', ar.assignment))
 
     def classTemplates(self, _):
         return '''
@@ -1178,9 +1053,24 @@ public var path: String {
 }
 //
     <%
-        def toJsonString(info):
-             if info.isArray: return info.name + '.map { $0.toJSON() } as AnyObject'
-             return info.name + '.toJSON() as AnyObject'
+        def makeAssignParamStatement(variable, classes, variable_name = '$0'):
+            found = [e for e in classes if e.name == variable.baseTypename]
+            if len(found) == 0:
+                return variable_name + ' as AnyObject'
+            else:
+                assert(len(found) == 1)
+                typeOrEnum = found[0]
+                if typeOrEnum.isEnum:
+                    if typeOrEnum.isRawStyle:
+                        return variable_name + '.rawValue as AnyObject'
+                    else:
+                        return '/* FIXME: not raw enum */'
+                else:
+                    return '/* FIXME: not enum */'
+
+        def toJsonString(variable, classes):
+             if variable.isArray: return variable.name + '.map { ' + makeAssignParamStatement(variable, classes) + ' } as AnyObject'
+             return makeAssignParamStatement(variable, classes, variable.name)
 
         pathParams, params = an.paramSets()
         diff = set(params).difference(set(pathParams))
@@ -1191,10 +1081,10 @@ public var path: String {
         dicx = [i for i in clazz.variables if i.name in diff]
 
         # FIXME: use annotation('route') insteadof annotation('json')
-        inits   = ['"%s": %s' % (i.annotation('json').jsonLabel, toJsonString(i)) for i in dicx if not i.isOptional]
+        inits   = ['"%s": %s' % (i.annotation('json').jsonLabel, toJsonString(i, classes)) for i in dicx if not i.isOptional]
         initStr = ', '.join(inits) if len(inits) else ':'
 
-        params = ['_ = %s.map { p["%s"] = $0.toJSON() as AnyObject }' % (i.name, i.annotation('json').jsonLabel) for i in dicx if i.isOptional]
+        params = ['_ = %s.map { p["%s"] = %s }' % (i.name, i.annotation('json').jsonLabel, makeAssignParamStatement(i, classes)) for i in dicx if i.isOptional]
     %>
 % if len(params) > 0 or len(inits) > 0:
 public var parameters: Any? {
@@ -1221,17 +1111,34 @@ class WSHelper():
 
     def enumTemplates(self, _):
         return '''
-
-static func parse(type: String, data: [String:AnyObject]) throws -> ${enum.name}? {
-    % for case in enum.cases:
-    <% an = case.annotation('ws') %>
-    % if not an.isOmitValue:
-    <%
-        name = case.variables[0].typename
-    %>
-    if type == "${an.name}" { return .${case.name}(try ${name}.parse(with: data)) }
-    % endif
-    % endfor
+fileprivate struct WSEventTypeChecker: Decodable {
+    let type: String
+}
+//
+fileprivate struct WSEvent<T: Decodable>: Decodable {
+    let type: String
+    let data: T
+}
+//
+static func parse(data: Data) throws -> ${enum.name}? {
+    let decoder = JSONDecoder()
+    if #available(OSX 10.12, iOS 10.0, *) {
+        decoder.dateDecodingStrategy = .iso8601
+    } else {
+        fatalError("Please use newer macOS")
+    }
+    if let eventType = try? decoder.decode(WSEventTypeChecker.self, from: data) {
+        let type = eventType.type
+        % for case in enum.cases:
+        <% an = case.annotation('ws') %>
+        % if not an.isOmitValue:
+        <%
+            name = case.variables[0].typename
+        %>
+        if type == "${an.name}" { let ev = try decoder.decode(WSEvent<${name}>.self, from: data); return .${case.name}(ev.data) }
+        % endif
+        % endfor
+    }
     return nil // FIXME
 }
 '''

@@ -12,9 +12,8 @@ protocol Equatable {}
 
 protocol Printable {}
 
-protocol JSONEncodable {}
-protocol JSONDecodable {}
-protocol NSCoding {}
+protocol Encodable {}  // Swift 4
+protocol Decodable {}  // Swift 4
 
 protocol URLRequestHelper {}
 protocol APIKitHelper {}

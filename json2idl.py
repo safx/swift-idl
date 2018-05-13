@@ -122,7 +122,7 @@ def guessTypenameFromSet(ts):
 def printClass(info, name, level = 0):
     subdicts = []
 
-    print('\t' * level + 'struct %s: JSONDecodable {' % name)
+    print('\t' * level + 'struct %s: Codable {' % name)
     for key, value in info.iteritems():
         fieldName = toCamelCase(key, False)
         comment = '' if fieldName == key else '// json:"%s"' % key
